@@ -1,10 +1,8 @@
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Union
-from src.coverage import CoverageFilter
-from src.basecounts import MAPClassifier
+from cleansweep.coverage import CoverageFilter
+from cleansweep.basecounts import MAPClassifier
 import pandas as pd
-from typing_extensions import Self
 
 @dataclass
 class VCFFilter:
@@ -52,9 +50,8 @@ class VCFFilter:
         
         # Join the final filter with the original VCF DataFrame
         filtered_vcf = vcf.join(self.predictions)
-        filtered_vcf.cleansweep_filter.fillna("HighCov", inplace=True)
 
-        return filtered_vcf.cleansweep_filter
+        return filtered_vcf.cleansweep_filter.fillna("HighCov")
     
     def fit_filter(self, vcf: pd.DataFrame, expected_coverage: Union[int, None] = None, 
         coverage_filter_params: dict = {}, basecount_filter_params: dict = {}) -> pd.DataFrame:

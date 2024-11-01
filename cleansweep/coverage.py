@@ -6,7 +6,7 @@ from sklearn.pipeline import Pipeline
 import pandas as pd
 import numpy as np
 from typing import List, Union, Collection, Callable, Any
-from src.vcf import VCF, get_info_value
+from cleansweep.vcf import VCF, get_info_value
 from warnings import warn
 from scipy.stats import norm, multivariate_normal
 
@@ -15,16 +15,17 @@ class CoverageFilter:
     def __init__(self, random_state: int = 23):
         self.random_state = random_state
     
-    def fit(self, vcf: pd.DataFrame, p_threshold: float = .1, **kwargs) -> pd.DataFrame:
+    def fit(self, vcf: pd.DataFrame, p_threshold: float = .01, **kwargs) -> pd.DataFrame:
         """Fits a Gaussian Mixture Model with two components to the total_depth of coverage of all 
         variants. Excludes variants assigned to the component of highest mean. The scale parameter
         allows for an adjustment of the FDR by altering the threshold of assignment.
 
         Args:
-            vcf (pd.DataFrame): DataFrame generated from a VCF object. Must have a `total_depth` column.
+            vcf (pd.DataFrame): DataFrame generated from a VCF object. Must have a `total_depth` column
+                or a TD tag in the `info` column.
             p_threshold (float, optional): Minimum CDF of the estimated total_depth of coverage
                 distribution from correctly called variants for a variant to be included. Controls 
-                the FDR. The default is 0.1.
+                the FDR. The default is 0.01.
 
         Returns:
             pd.DataFrame: VCF DataFrame with a `coverage_filter` column appended. Excluded 
@@ -36,6 +37,7 @@ class CoverageFilter:
             ("scaler", StandardScaler()),
             ("gmm", GaussianMixture(n_components=2, random_state=self.random_state, **kwargs))
         ])
+        vcf = self.add_total_depth(vcf)
         gm.fit(vcf[["total_depth"]].values)
         preds = pd.Series(gm.predict(vcf[["total_depth"]].values), index=vcf.index)
 
@@ -90,3 +92,10 @@ class CoverageFilter:
 
         return model.named_steps["scaler"] \
             .inverse_transform(model.named_steps["gmm"].means_)
+    
+    def add_total_depth(self, vcf: pd.DataFrame):
+
+        if not hasattr(vcf, "total_depth"):
+            return vcf.assign(total_depth=vcf["info"] \
+                .apply(partial(get_info_value, tag="TD", dtype=int)))
+        else: return vcf

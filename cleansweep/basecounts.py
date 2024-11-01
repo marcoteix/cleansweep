@@ -1,4 +1,5 @@
 #%%
+from functools import partial
 from typing import Union
 from typing_extensions import Self, Literal
 import numpy as np
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from sklearn.neighbors import KernelDensity
 from numpy.typing import ArrayLike
 from scipy.stats import poisson
+from cleansweep.vcf import get_info_value
 
 
 def add_base_counts(vcf: pd.DataFrame) -> pd.DataFrame:
@@ -24,6 +26,10 @@ def add_base_counts(vcf: pd.DataFrame) -> pd.DataFrame:
     # Order of bases in the VCF BC tag
     bases = {"A": 0, "C": 1, "G": 2, "T": 3}
 
+    if not hasattr(vcf, "base_counts"):
+        vcf = vcf.assign(base_counts = vcf["info"] \
+            .apply(partial(get_info_value, tag="BC", dtype=str)))
+
     return vcf.assign(
         alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
         ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1)
@@ -39,9 +45,9 @@ class BaseCountEstimator:
 
     def __check_vcf(self, vcf: pd.DataFrame):
 
-        for attr in ["base_counts", "filter"]:
+        for attr in ["filter"]:
             if not hasattr(vcf, attr):
-                raise ValueError("The VCF is missing a \"{attr}\" column.")
+                raise ValueError(f"The VCF is missing a \"{attr}\" column.")
             
     def __fit_ref_bc_given_alt_allele(self, vcf: pd.DataFrame, kde_kwargs: dict = {}) -> KernelDensity:
 
@@ -123,17 +129,17 @@ class BaseCountEstimator:
         """
 
         if not hasattr(base_count, "__len__"):
-            return kde.score_samples(np.array([[base_count]]))
+            return np.maximum(kde.score_samples(np.array([[base_count]])), -5e5)
         else:
             # Support vor vectorization
             if isinstance(base_count, pd.Series):
                 return pd.Series(
-                    kde.score_samples(base_count.values.reshape(-1,1)),
+                    np.maximum(kde.score_samples(base_count.values.reshape(-1,1)), -5e5),
                     index = base_count.index,
                     name="logp_alt_bc_given_ref_allele"
                 )
             else:
-                return kde.score_samples(base_count.reshape(-1,1))
+                return np.maximum(kde.score_samples(base_count.reshape(-1,1)), -5e5)
             
 @dataclass
 class MAPClassifier:
@@ -188,7 +194,7 @@ class MAPClassifier:
         self.logp_fail = self.kde.logp_alt_bc_given_ref_allele(vcf.alt_bc
             ) + self.__get_poisson_logp(vcf.ref_bc, expected_coverage
             ) + np.log(self.reference_ani)
-        
+
         return self.logp_pass.gt(self.logp_fail).replace({True: "PASS", False:"FAIL"})
 
     def predict_sample(self, ref_bc: int, alt_bc: int, 
@@ -203,6 +209,6 @@ class MAPClassifier:
         self.logp_fail = self.kde.logp_alt_bc_given_ref_allele(alt_bc
             ) + self.__get_poisson_logp(ref_bc, expected_coverage
             ) + np.log(self.reference_ani)
-        
+
         return "PASS" if self.logp_pass > self.logp_fail else "FAIL"
 # %%
