@@ -9,6 +9,7 @@ class VCFFilter:
 
     reference_ani: float = .998
     random_state: Union[int, None] = 23
+    uncertainty: float = 5.0
 
     def fit(self, vcf: pd.DataFrame, expected_coverage: Union[int, None] = None, 
         coverage_filter_params: dict = {}, basecount_filter_params: dict = {}) -> pd.Series:
@@ -36,7 +37,7 @@ class VCFFilter:
         # Fit the second filter (based on alt and ref base counts) with the 
         # passing sites from the first filter
         filtered_vcf = self.coverage_filter.filter(filtered_vcf)
-        self.basecount_filter = MAPClassifier(reference_ani=self.reference_ani)
+        self.basecount_filter = MAPClassifier(reference_ani=self.reference_ani, uncertainty=self.uncertainty)
         self.basecount_filter.fit(filtered_vcf, **basecount_filter_params)
 
         # If there is no user provided expected coverage for the query strain,
@@ -44,14 +45,16 @@ class VCFFilter:
         if expected_coverage is None:
             expected_coverage = self.coverage_filter.mean_query_coverage
 
-        self.predictions = self.basecount_filter.predict(filtered_vcf, 
-            expected_coverage=expected_coverage) \
-            .rename("cleansweep_filter")
+        bc_probs = self.basecount_filter.predict_proba(filtered_vcf, 
+            expected_coverage=expected_coverage)
+        self.predictions = bc_probs.assign(
+            cleansweep_filter=bc_probs.logp_pass.gt(bc_probs.logp_fail) \
+                .replace({True: "PASS", False:"FAIL"}))
         
         # Join the final filter with the original VCF DataFrame
-        filtered_vcf = vcf.join(self.predictions)
+        self.predictions.cleansweep_filter = self.predictions.cleansweep_filter.fillna("HighCov")
 
-        return filtered_vcf.cleansweep_filter.fillna("HighCov")
+        return self.predictions
     
     def fit_filter(self, vcf: pd.DataFrame, expected_coverage: Union[int, None] = None, 
         coverage_filter_params: dict = {}, basecount_filter_params: dict = {}) -> pd.DataFrame:

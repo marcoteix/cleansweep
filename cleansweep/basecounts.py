@@ -29,10 +29,14 @@ def add_base_counts(vcf: pd.DataFrame) -> pd.DataFrame:
     if not hasattr(vcf, "base_counts"):
         vcf = vcf.assign(base_counts = vcf["info"] \
             .apply(partial(get_info_value, tag="BC", dtype=str)))
+        
+    if not hasattr(vcf, "mapq"):
+        vcf = vcf.assign(mapq = vcf["info"] \
+            .apply(partial(get_info_value, tag="MQ", dtype=int)))
 
     return vcf.assign(
         alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
-        ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1)
+        ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
     )
 
 @dataclass
@@ -49,19 +53,23 @@ class BaseCountEstimator:
             if not hasattr(vcf, attr):
                 raise ValueError(f"The VCF is missing a \"{attr}\" column.")
             
-    def __fit_ref_bc_given_alt_allele(self, vcf: pd.DataFrame, kde_kwargs: dict = {}) -> KernelDensity:
+    def __fit_alt_bc_given_alt_allele(self, vcf: pd.DataFrame, kde_kwargs: dict = {}) -> KernelDensity:
 
-        self.ref_kde = KernelDensity(kernel="tophat", 
+        features = ["alt_bc", "mapq"]
+
+        self.pass_kde = KernelDensity(kernel="gaussian", 
             bandwidth=self.kde_bandwith, **kde_kwargs)
-        samples = vcf[vcf["filter"].eq("PASS")].ref_bc.values.reshape(-1, 1)
-        return self.ref_kde.fit(samples)
+        samples = vcf[vcf["filter"].eq("PASS")][features].values
+        return self.pass_kde.fit(samples)
 
     def __fit_alt_bc_given_ref_allele(self, vcf: pd.DataFrame, kde_kwargs: dict = {}) -> KernelDensity:
 
-        self.alt_kde = KernelDensity(kernel="tophat", 
+        features = ["alt_bc", "mapq"]
+
+        self.fail_kde = KernelDensity(kernel="gaussian", 
             bandwidth=self.kde_bandwith, **kde_kwargs)
-        samples = vcf[vcf["filter"].str.contains("Amb")].alt_bc.values.reshape(-1, 1)
-        return self.alt_kde.fit(samples)
+        samples = vcf[vcf["filter"].str.contains("Amb")][features].values
+        return self.fail_kde.fit(samples)
     
     def fit(self, vcf: pd.DataFrame, kde_kwargs: dict = {}) -> Self:
         """Fits Kernel Density estimators (tophat kernel, bandwith of 0.5) of the conditional
@@ -78,11 +86,11 @@ class BaseCountEstimator:
         vcf = self.__add_base_counts(vcf)
 
         self.__fit_alt_bc_given_ref_allele(vcf, kde_kwargs)
-        self.__fit_ref_bc_given_alt_allele(vcf, kde_kwargs)
+        self.__fit_alt_bc_given_alt_allele(vcf, kde_kwargs)
 
         return self
     
-    def logp_alt_bc_given_ref_allele(self, alt_bc: Union[int, float, pd.Series, ArrayLike]
+    def logp_alt_bc_given_ref_allele(self, alt_bc: Union[int, float, pd.Series, ArrayLike], mapq
                                      ) -> Union[float, pd.Series, ArrayLike]:
         """Gives the conditional log-likelihood for an observed alternate allele base count,
         given that the query contains the reference allele. Supports vectorization.
@@ -97,25 +105,25 @@ class BaseCountEstimator:
                 input base counts.
         """
 
-        return self.__predict_logp(alt_bc, self.alt_kde)
+        return self.__predict_logp(alt_bc, mapq, self.fail_kde)
 
-    def logp_ref_bc_given_alt_allele(self, ref_bc: Union[int, float, pd.Series, ArrayLike]
+    def logp_alt_bc_given_alt_allele(self, alt_bc: Union[int, float, pd.Series, ArrayLike], mapq
                                      ) -> Union[float, pd.Series, ArrayLike]:
-        """Gives the conditional log-likelihood for an observed reference allele base count,
+        """Gives the conditional log-likelihood for an observed alternate allele base count,
         given that the query contains the alternate allele. Supports vectorization.
 
         The object must be fitted first (with `fit()`) before calling this method.
 
         Args:
-            ref_bc (Union[int, float, pd.Series, ArrayLike]): Reference allele base counts.
+            alt_bc (Union[int, float, pd.Series, ArrayLike]): Reference allele base counts.
 
         Returns:
             logp (Union[float, pd.Series, ArrayLike]): Conditional log-likelihood for the 
                 input base counts.
         """
-        return self.__predict_logp(ref_bc, self.ref_kde)
+        return self.__predict_logp(alt_bc, mapq, self.pass_kde)
             
-    def __predict_logp(self, base_count: Union[int, float, pd.Series, ArrayLike],
+    def __predict_logp(self, base_count: Union[int, float, pd.Series, ArrayLike], mapq,
         kde: KernelDensity) -> Union[float, pd.Series, ArrayLike]:
         """Predicts the log-likelihood for a given base count using a fitted KDE. Supports
         vectorization.
@@ -129,22 +137,27 @@ class BaseCountEstimator:
         """
 
         if not hasattr(base_count, "__len__"):
-            return np.maximum(kde.score_samples(np.array([[base_count]])), -5e5)
+            return np.maximum(kde.score_samples(np.array([[base_count, mapq]])), -5e5)
         else:
             # Support vor vectorization
+            X = np.hstack(
+                [base_count.values.reshape(-1,1),
+                mapq.values.reshape(-1,1)]
+            )
             if isinstance(base_count, pd.Series):
                 return pd.Series(
-                    np.maximum(kde.score_samples(base_count.values.reshape(-1,1)), -5e5),
+                    np.maximum(kde.score_samples(X), -5e5),
                     index = base_count.index,
                     name="logp_alt_bc_given_ref_allele"
                 )
             else:
-                return np.maximum(kde.score_samples(base_count.reshape(-1,1)), -5e5)
+                return np.maximum(kde.score_samples(X), -5e5)
             
 @dataclass
 class MAPClassifier:
 
     reference_ani: float = .998
+    uncertainty: float = 5.0
 
     def __get_poisson_logp(self, base_counts: Union[int, ArrayLike, pd.Series], 
         expected_coverage: Union[int, float]) -> Union[float, ArrayLike, pd.Series]:
@@ -166,8 +179,21 @@ class MAPClassifier:
             Self: Fitted MAPClassifier.
         """
 
+        vcf = add_base_counts(vcf)
+
         # Fit KDEs for the conditional likelihoods
-        self.kde = BaseCountEstimator(**kde_kwargs).fit(vcf)
+        self.kde_pre = BaseCountEstimator(**kde_kwargs).fit(vcf)
+        # Estimate initial PASS/FAIL probabilities
+        logp_pass = self.kde_pre.logp_alt_bc_given_alt_allele(vcf.alt_bc, vcf.mapq)
+        logp_fail = self.kde_pre.logp_alt_bc_given_ref_allele(vcf.alt_bc, vcf.mapq)
+
+        # Re-fit the KDEs without uncertain calls
+        certain = (logp_pass-logp_fail).abs().ge(self.uncertainty)
+        vcf_certain = vcf[certain]
+        vcf_certain.loc[:, "filter"] = (logp_pass-logp_fail).gt(0).replace({True:"PASS", False:"Amb"})
+        
+        self.kde = BaseCountEstimator(**kde_kwargs).fit(vcf_certain)
+
         return self
     
     def predict(self, vcf: pd.DataFrame, expected_coverage: Union[int, float]) -> pd.Series:
@@ -183,19 +209,24 @@ class MAPClassifier:
             pd.Series: Predicted `PASS` or `FAIL` flags.
         """
 
+        probs = self.predict_proba(vcf)
+
+        return probs.logp_pass.gt(probs.logp_fail).replace({True: "PASS", False:"FAIL"})
+    
+    def predict_proba(self, vcf: pd.DataFrame, expected_coverage: Union[int, float]) -> pd.Series:
+
         vcf = add_base_counts(vcf)
 
         # Posterior for the query having the alternate allele
-        self.logp_pass = self.kde.logp_ref_bc_given_alt_allele(vcf.ref_bc
-            ) + self.__get_poisson_logp(vcf.alt_bc, expected_coverage
-            ) + np.log(1-self.reference_ani)
+        self.logp_pass = self.kde.logp_alt_bc_given_alt_allele(vcf.alt_bc, vcf.mapq)
         
         # Posterior for the query having the reference allele
-        self.logp_fail = self.kde.logp_alt_bc_given_ref_allele(vcf.alt_bc
-            ) + self.__get_poisson_logp(vcf.ref_bc, expected_coverage
-            ) + np.log(self.reference_ani)
+        self.logp_fail = self.kde.logp_alt_bc_given_ref_allele(vcf.alt_bc, vcf.mapq)
 
-        return self.logp_pass.gt(self.logp_fail).replace({True: "PASS", False:"FAIL"})
+        self.logp_pass = self.logp_pass.rename("logp_pass")
+        self.logp_fail = self.logp_fail.rename("logp_fail")
+
+        return pd.concat([self.logp_pass, self.logp_fail], axis=1)
 
     def predict_sample(self, ref_bc: int, alt_bc: int, 
                        expected_coverage: Union[int, float]) -> Literal["PASS", "FAIL"]:
