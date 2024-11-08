@@ -1,107 +1,75 @@
 from dataclasses import dataclass
 from typing import Union
 from cleansweep.coverage import CoverageFilter
-from cleansweep.basecounts import MAPClassifier
+from cleansweep.io import FilePath
+from cleansweep.mcmc import BaseCountFilter
 import pandas as pd
+import joblib
+from copy import deepcopy
 
 @dataclass
 class VCFFilter:
 
-    reference_ani: float = .998
-    random_state: Union[int, None] = 23
-    uncertainty: float = 5.0
+    random_state: int = 23
 
-    def fit(self, vcf: pd.DataFrame, expected_coverage: Union[int, None] = None, 
-        coverage_filter_params: dict = {}, basecount_filter_params: dict = {}) -> pd.Series:
-        """Fits the CleanSweep filters and predicts a filtering result (`PASS`, `FAIL`, or `HighCov`)
-        for each variant in a Pilon VCF DataFrame.
+    def fit(
+        self, 
+        vcf: pd.DataFrame, 
+        coverages: pd.Series,
+        query_name: str, 
+        *,
+        chains: int = 5,
+        draws: int = 10000,
+        burn_in: int = 1000,
+        bias: float = 0.5,
+        threads: int = 4,
+        coverage_filter_params: dict = {}
+    ) -> pd.Series:
 
-        Args:
-            vcf (pd.DataFrame): Pilon VCF DataFrame.
-            expected_coverage (int | None, optional): Expected coverage of the query strain. If `None`, 
-                estimates it from the component of lowest mean in the first coverage-based filter. 
-                Defaults to None.
-            coverage_filter_params (dict, optional): Parameters passed to the coverage filter. See 
-                `CoverageFilter.fit()` for a list of parameters. Defaults to {}.
-            basecount_filter_params (dict, optional): Parameters passed to the base counts filter. See 
-                `MAPClassifier.fit()` for a list of parameters. Defaults to {}.
-
-        Returns:
-            filtering_results (pd.Series): Filtering results, with the same index as the input `vcf`.
-        """
+        # Coverage of the query strain
+        self.query_coverage = self.__get_query_coverage(coverages=coverages, query_name=query_name)
 
         # Fit and apply the coverage-based filter
         self.coverage_filter = CoverageFilter(random_state=self.random_state)
-        filtered_vcf = self.coverage_filter.fit(vcf, **coverage_filter_params)
+        vcf = self.coverage_filter.fit(vcf, self.query_coverage, **coverage_filter_params)
+        filtered_vcf = self.coverage_filter.filter(vcf)
 
-        # Fit the second filter (based on alt and ref base counts) with the 
-        # passing sites from the first filter
-        filtered_vcf = self.coverage_filter.filter(filtered_vcf)
-        self.basecount_filter = MAPClassifier(reference_ani=self.reference_ani, uncertainty=self.uncertainty)
-        self.basecount_filter.fit(filtered_vcf, **basecount_filter_params)
+        self.basecount_filter = BaseCountFilter(chains=chains, draws=draws, burn_in=burn_in,
+            bias=bias, threads=threads)
+        # Fit and get the probabilities of the query having the alternate allele
+        p_alt = self.basecount_filter.fit(vcf=filtered_vcf, coverages=coverages.to_dict(), 
+            query=query_name)
+        # Join the probabilities with the VCF DataFrame
+        vcf = vcf.join(p_alt.rename("p_alt"))
+        return self.__add_filter_tag(vcf=vcf)
 
-        # If there is no user provided expected coverage for the query strain,
-        # estimate it using the coverage filter
-        if expected_coverage is None:
-            expected_coverage = self.coverage_filter.mean_query_coverage
+    def save_samples(self, path: FilePath) -> None:
 
-        bc_probs = self.basecount_filter.predict_proba(filtered_vcf, 
-            expected_coverage=expected_coverage)
-        self.predictions = bc_probs.assign(
-            cleansweep_filter=bc_probs.logp_pass.gt(bc_probs.logp_fail) \
-                .replace({True: "PASS", False:"FAIL"}))
-        
-        # Join the final filter with the original VCF DataFrame
-        self.predictions.cleansweep_filter = self.predictions.cleansweep_filter.fillna("HighCov")
+        joblib.dump(
+            deepcopy(self.basecount_filter.sampling_results), 
+            path,
+            compress=5
+        )
 
-        return self.predictions
-    
-    def fit_filter(self, vcf: pd.DataFrame, expected_coverage: Union[int, None] = None, 
-        coverage_filter_params: dict = {}, basecount_filter_params: dict = {}) -> pd.DataFrame:
-        """Fits the CleanSweep filters and filters the variants in a Pilon VCF DataFrame.
+    def save(self, path: FilePath) -> None:
 
-        Args:
-            vcf (pd.DataFrame): Pilon VCF DataFrame.
-            expected_coverage (int | None, optional): Expected coverage of the query strain. If `None`, 
-                estimates it from the component of lowest mean in the first coverage-based filter. 
-                Defaults to None.
-            coverage_filter_params (dict, optional): Parameters passed to the coverage filter. See 
-                `CoverageFilter.fit()` for a list of parameters. Defaults to {}.
-            basecount_filter_params (dict, optional): Parameters passed to the base counts filter. See 
-                `MAPClassifier.fit()` for a list of parameters. Defaults to {}.
+        joblib.dump(
+            deepcopy(self),
+            path,
+            compress=5
+        )
 
-        Returns:
-            filtering_results (pd.DataFrame): Variants in the input `vcf` passing all CleanSweep filters.
-        """
+    def __add_filter_tag(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
-        filter_results = self.fit(vcf, expected_coverage=expected_coverage,
-            coverage_filter_params=coverage_filter_params, 
-            basecount_filter_params=basecount_filter_params)
-        vcf = vcf.join(filter_results)
-        return vcf[vcf.cleansweep_filter.eq("PASS")].drop(columns="cleansweep_filter")
+        vcf = vcf.assign(cleansweep_filter=vcf.p_alt.ge(self.bias)).replace(
+            {True: "PASS", False: "FAIL"})
+        vcf.loc[:, "cleansweep_filter"] = vcf.cleansweep_filter.fillna("HighCov")
 
-    def summary(self) -> dict:
-        """Get summary statistics from the last fit of this object.
+        return vcf
 
-        Returns:
-            stats (dict): Sumary statistics.
-        """
+    def __get_query_coverage(self, coverages: pd.Series, query_name: str) -> float:
 
-        if not hasattr(self, "predictions"):
-            raise RuntimeError("This object does not have predictions. Please fit the \
-filters (with fit() or fit_filter())before calling summary().")
-
-        return {
-            "Coverage filter (Step 1)":
-                {
-                    "Number of excluded variants": self.predictions.eq("HighCov").sum(),
-                    "Number of passing variants": self.predictions.ne("HighCov").sum(),
-                    "Means of the estimated components": 
-                        ", ".join([str(x) for x in self.coverage_filter.get_means()])
-                },
-            "Base counts filter (Step 2)":
-                {
-                    "Number of excluded variants": self.predictions.eq("FAIL").sum(),
-                    "Number of passing variants": self.predictions.eq("PASS").sum()
-                }
-        }
+        if not query_name in coverages.index:
+            raise ValueError(f"No coverage information found for the query strain ({query_name}). \
+Got coverage information for the strains {', '.join(coverages.index.to_list())}.")
+        return coverages[query_name]

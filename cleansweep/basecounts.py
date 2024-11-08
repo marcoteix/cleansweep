@@ -33,7 +33,7 @@ def add_base_counts(vcf: pd.DataFrame) -> pd.DataFrame:
     if not hasattr(vcf, "mapq"):
         vcf = vcf.assign(mapq = vcf["info"] \
             .apply(partial(get_info_value, tag="MQ", dtype=int)))
-
+        
     return vcf.assign(
         alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
         ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
@@ -242,4 +242,12 @@ class MAPClassifier:
             ) + np.log(self.reference_ani)
 
         return "PASS" if self.logp_pass > self.logp_fail else "FAIL"
+    
+    def estimate_strain(self, vcf: pd.DataFrame, query_coverage: float, 
+        background_coverages: ArrayLike) -> pd.Series:
+
+        coverages = np.hstack([query_coverage, background_coverages])
+        return vcf.alt_bc.apply(
+            lambda x: np.argmax([poisson(c).pmf(x) for c in coverages])==0) \
+            .replace({True: "query", False: "background"})
 # %%

@@ -8,14 +8,15 @@ import numpy as np
 from typing import List, Union, Collection, Callable, Any
 from cleansweep.vcf import VCF, get_info_value
 from warnings import warn
-from scipy.stats import norm, multivariate_normal
+from scipy.stats import norm, multivariate_normal, poisson, rv_continuous
+from numpy.typing import ArrayLike
 
 class CoverageFilter:
 
     def __init__(self, random_state: int = 23):
         self.random_state = random_state
     
-    def fit(self, vcf: pd.DataFrame, p_threshold: float = .01, **kwargs) -> pd.DataFrame:
+    def fit(self, vcf: pd.DataFrame, query_coverage: float, p_threshold: float = .01, **kwargs) -> pd.DataFrame:
         """Fits a Gaussian Mixture Model with two components to the total_depth of coverage of all 
         variants. Excludes variants assigned to the component of highest mean. The scale parameter
         allows for an adjustment of the FDR by altering the threshold of assignment.
@@ -41,20 +42,20 @@ class CoverageFilter:
         gm.fit(vcf[["total_depth"]].values)
         preds = pd.Series(gm.predict(vcf[["total_depth"]].values), index=vcf.index)
 
-        # Check which component has the highest mean
+        # For each component, set it as "to keep" if the probability of observing its mean 
+        # or a smaller value is less than p_threshold, assuming that the coverage of the
+        # query follows a Poisson distribution
         means = self.get_means(model=gm)
-        include_grp = np.argmin(means)
-        # Store the lowest mean as an attribute, to estimate the coverage of the query strain
-        self.mean_query_coverage = np.min(means)
-        # Get the p-values according to the distribution to include
-        vcf = vcf.assign(**{"coverage_p": vcf["total_depth"].apply(
-            partial(self.get_p, gm=gm, include_grp=include_grp))})
-        fail_flag = "HighCov"
+        distributions = [self.get_distribution(gmm=gm.named_steps["gmm"], include_grp=i) for i in range(2)]
+        distributions = [x for x in distributions if self.score_distribution(distribution=x, 
+            query_coverage=query_coverage, gmm=gm)]
 
-        # Set to PASS all variants with high likelihood for the distribution to include or
-        # assigned to that distribution by the GMM
-        vcf["coverage_filter"] = (vcf["coverage_p"].le(p_threshold) & preds.ne(include_grp)) \
-            .replace({True: fail_flag, False: "PASS"})
+        # Get p-values
+        vcf = vcf.assign(coverage_p = vcf.total_depth.apply(
+            partial(self.get_p, distributions=distributions, gmm=gm)))
+        
+        vcf = vcf.assign(coverage_filter=vcf.coverage_p.lt(p_threshold) \
+            .replace({True: "HighCov", False: "PASS"}))
 
         if not gm.named_steps["gmm"].converged_:
             warn(f"The coverage GMM did not converge. Try increasing the number of iterations.")
@@ -63,14 +64,23 @@ class CoverageFilter:
 
         return vcf
     
-    def get_p(self, value: Union[int, float, Collection], gm: Pipeline, include_grp: int):
+    def score_distribution(self, distribution: rv_continuous, query_coverage: float, gmm: Pipeline) -> float:
 
-        distribution = self.get_distribution(gm.named_steps["gmm"], include_grp)
-        if isinstance(value, (int, float)): value = [value]
-        elif isinstance(value, pd.Series): value = value.values
-        cdf = distribution.cdf(gm.named_steps["scaler"].transform([value]))
-        if not isinstance(cdf, (int, float)): cdf = cdf[0,0]
-        return 1-cdf
+        # Scale the query coverage
+        query_cov_t = gmm.named_steps["scaler"].transform(np.array([[query_coverage]]))
+        # How extreme is the expected coverage in the distribution?
+        p_val = distribution.cdf(query_cov_t)
+
+        return p_val>.1
+    
+    def get_p(self, value: Union[int, float, Collection], distributions: Collection[rv_continuous], gmm: Pipeline):
+        
+        # Transform value
+        value_t = gmm.named_steps["scaler"].transform(np.array([[value]]))
+
+        p_vals = [1-distribution.cdf(value_t) for distribution in distributions]
+        if not len(p_vals): return 0.0
+        else: return max(p_vals)
     
     def get_distribution(self, gmm: GaussianMixture, include_grp: int) -> Any:
 

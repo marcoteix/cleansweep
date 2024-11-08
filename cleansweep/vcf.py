@@ -1,3 +1,4 @@
+from functools import partial
 import pandas as pd
 import subprocess
 from typing import Union, Collection
@@ -53,6 +54,8 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         self.vcf = pd.read_csv(StringIO(rc.stdout.decode("utf-8")), sep="\t", comment="#", header=None)  
         self.vcf.columns = _VCF_HEADER[:self.vcf.shape[1]]
 
+        self.vcf = self.add_info_columns(self.vcf)
+
         return self.vcf
 
     def exclude_indels(self, vcf: Union[None, pd.DataFrame]=None) -> pd.DataFrame:
@@ -75,6 +78,34 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         vcf = vcf[vcf.chrom.isin(chroms)]
         if inplace: self.vcf = vcf
         return vcf
+    
+    def add_info_columns(vcf: pd.DataFrame) -> pd.DataFrame:
+        """Adds the number of bases supporting the reference and alternate allele and the mean mapping
+        quality per site as columns to a VCF DataFrame.
+
+        Args:
+            vcf (pd.DataFrame): VCF Pandas DataFrame.
+
+        Returns:
+            pd.DataFrame: VCF Pandas DataFrame with reference and allele basecounts (
+                columns \"ref_bc\" and \"alt_bc\", respectively), and mapping quality (\"mapq\").
+        """
+
+        # Order of bases in the VCF BC tag
+        bases = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+        if not hasattr(vcf, "base_counts"):
+            vcf = vcf.assign(base_counts = vcf["info"] \
+                .apply(partial(get_info_value, tag="BC", dtype=str)))
+            
+        if not hasattr(vcf, "mapq"):
+            vcf = vcf.assign(mapq = vcf["info"] \
+                .apply(partial(get_info_value, tag="MQ", dtype=int)))
+            
+        return vcf.assign(
+            alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
+            ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
+        )
     
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None
