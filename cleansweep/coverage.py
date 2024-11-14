@@ -69,7 +69,7 @@ class CoverageFilter:
         # Scale the query coverage
         query_cov_t = gmm.named_steps["scaler"].transform(np.array([[query_coverage]]))
         # How extreme is the expected coverage in the distribution?
-        p_val = distribution.cdf(query_cov_t)
+        p_val = distribution.cdf(query_cov_t[0,0])
 
         return p_val>.1
     
@@ -78,7 +78,7 @@ class CoverageFilter:
         # Transform value
         value_t = gmm.named_steps["scaler"].transform(np.array([[value]]))
 
-        p_vals = [1-distribution.cdf(value_t) for distribution in distributions]
+        p_vals = [1-distribution.cdf(value_t[0,0]) for distribution in distributions]
         if not len(p_vals): return 0.0
         else: return max(p_vals)
     

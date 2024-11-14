@@ -17,6 +17,7 @@ class BaseCountFilter:
     random_state: int = 23
     bias: float = 0.5
     threads: Union[int, None] = 4
+    engine: str = "pymc"
 
     def fit(self, vcf: pd.DataFrame, coverages: dict, query: str) -> pd.DataFrame:
 
@@ -44,7 +45,8 @@ class BaseCountFilter:
             pm.NegativeBinomial("nb", n=alt_trials, p=nb_alpha, observed=samples)
 
             self.sampling_results = pm.sample(chains=self.chains, draws=self.draws, 
-                random_seed=self.random_state, tune=self.burn_in, cores=self.threads)
+                random_seed=self.random_state, tune=self.burn_in, cores=self.threads,
+                nuts_sampler=self.engine)
 
         # Return the probabilities of the query having the alternate allele
         return self.get_allele_p(query)
@@ -66,8 +68,7 @@ class BaseCountFilter:
         return self.sampling_results["posterior"]["alleles"] \
             .mean(dim=["draw", "chain"]) \
             .sel({"strains":strain}) \
-            .to_dataframe() \
-            .drop(columns="strains")
+            .to_dataframe().alleles
 
     def __get_coordinates(self, coverages: dict, bc: pd.Series) -> dict:
         

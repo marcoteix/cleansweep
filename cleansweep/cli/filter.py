@@ -16,7 +16,7 @@ class FilterCmd(Subcommand):
     def add_arguments(self, parser: argparse.ArgumentParser):
         
         parser.add_argument("input", type=str, help="Input Pilon VCF file.")
-        parser.add_argument("query", type=str, required=True, help="ID of the query strain, as it \
+        parser.add_argument("query", type=str, help="ID of the query strain, as it \
 appears in the alignment files.")
         parser.add_argument("output", type=str, help="Output directory.")
         parser.add_argument("--coverages", "-c", type=str, help="Table of depth of coverages per \
@@ -33,6 +33,8 @@ of a variant being true needed for a variant to pass the CleanSweep filters. Con
 value between 0 and 1. Defaults to 0.5.")
         parser.add_argument("--threads", "-t", type=int, default=1, help="Number of threads used in \
 MCMC. Defaults to 1.")
+        parser.add_argument("--engine", "-e", type=str, default="pymc", choices=["pymc", "numpyro", "nutpie"], 
+help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
           
     def run(
         self,
@@ -45,6 +47,7 @@ MCMC. Defaults to 1.")
         n_burnin: int,
         bias: float,
         threads: int,
+        engine: str,
         output: FilePath
     ):
         
@@ -52,8 +55,8 @@ MCMC. Defaults to 1.")
         outdir.mkdir(parents=False, exist_ok=True)
 
         # Read input files
-        input_loader = InputLoader().load(vcf=input, coverage=coverages)
-        
+        input_loader = InputLoader().load(vcf=input, coverage=coverages, query=query)
+
         # Filter
         vcf_filter = VCFFilter(random_state = seed)
         vcf_out = vcf_filter.fit(

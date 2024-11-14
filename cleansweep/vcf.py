@@ -20,7 +20,7 @@ class VCF:
 
         if isinstance(self.file, Path): self.file = str(self.file) 
 
-    def read(self, filters: Union[Collection[str], None]=None, include: Union[str, None]=None,
+    def read(self, chrom: str, filters: Union[Collection[str], None]=None, include: Union[str, None]=None,
         exclude: Union[str, None]=None) -> pd.DataFrame:
         """Filters a VCF file (compressed or uncompressed) with bcftools. Requires bcftools.
 
@@ -54,6 +54,10 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         self.vcf = pd.read_csv(StringIO(rc.stdout.decode("utf-8")), sep="\t", comment="#", header=None)  
         self.vcf.columns = _VCF_HEADER[:self.vcf.shape[1]]
 
+        # Keep variants in the query
+        self.vcf = self.vcf[self.vcf.chrom.eq(chrom)]
+
+        self.vcf = self.remove_indels(self.vcf)
         self.vcf = self.add_info_columns(self.vcf)
 
         return self.vcf
@@ -79,7 +83,7 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         if inplace: self.vcf = vcf
         return vcf
     
-    def add_info_columns(vcf: pd.DataFrame) -> pd.DataFrame:
+    def add_info_columns(self, vcf: pd.DataFrame) -> pd.DataFrame:
         """Adds the number of bases supporting the reference and alternate allele and the mean mapping
         quality per site as columns to a VCF DataFrame.
 
@@ -106,6 +110,10 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
             ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
         )
+    
+    def remove_indels(self, vcf: pd.DataFrame) -> pd.DataFrame:
+
+        return vcf[vcf.alt.ne(".") & vcf.ref.ne(".")]
     
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None

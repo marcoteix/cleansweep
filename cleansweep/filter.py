@@ -23,6 +23,7 @@ class VCFFilter:
         burn_in: int = 1000,
         bias: float = 0.5,
         threads: int = 4,
+        engine: str = "pymc",
         coverage_filter_params: dict = {}
     ) -> pd.Series:
 
@@ -35,13 +36,13 @@ class VCFFilter:
         filtered_vcf = self.coverage_filter.filter(vcf)
 
         self.basecount_filter = BaseCountFilter(chains=chains, draws=draws, burn_in=burn_in,
-            bias=bias, threads=threads)
+            bias=bias, threads=threads, engine=engine)
         # Fit and get the probabilities of the query having the alternate allele
         p_alt = self.basecount_filter.fit(vcf=filtered_vcf, coverages=coverages.to_dict(), 
             query=query_name)
         # Join the probabilities with the VCF DataFrame
         vcf = vcf.join(p_alt.rename("p_alt"))
-        return self.__add_filter_tag(vcf=vcf)
+        return self.__add_filter_tag(vcf=vcf, bias=bias)
 
     def save_samples(self, path: FilePath) -> None:
 
@@ -59,9 +60,9 @@ class VCFFilter:
             compress=5
         )
 
-    def __add_filter_tag(self, vcf: pd.DataFrame) -> pd.DataFrame:
+    def __add_filter_tag(self, vcf: pd.DataFrame, bias: float) -> pd.DataFrame:
 
-        vcf = vcf.assign(cleansweep_filter=vcf.p_alt.ge(self.bias)).replace(
+        vcf = vcf.assign(cleansweep_filter=vcf.p_alt.ge(bias)).replace(
             {True: "PASS", False: "FAIL"})
         vcf.loc[:, "cleansweep_filter"] = vcf.cleansweep_filter.fillna("HighCov")
 
