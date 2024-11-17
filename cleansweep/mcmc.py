@@ -22,33 +22,39 @@ class BaseCountFilter:
     
     def fit(self, vcf: pd.DataFrame, coverages: dict, query: str) -> pd.DataFrame:
 
-        coordinates = self.__get_coordinates(coverages, vcf.alt_bc)
+        coordinates = self.__get_coordinates(query, coverages, vcf.alt_bc)
         self.query = query
 
         samples = vcf[["alt_bc", "ref_bc"]].values.flatten()
-        is_ref = pt.as_tensor(np.hstack([np.array([0,1]*len(vcf)).reshape(-1,1)]*len(coverages)))
+        is_ref = pt.as_tensor(np.hstack([np.array([0,1]*len(vcf))]))
         sample_ids = np.repeat(np.arange(vcf.shape[0]), 2)
 
         coverages_pt = pt.as_tensor(list(coverages.values()))
+        bgd_coverages = pt.as_tensor([v for k,v in coverages.items() if k!= query])
 
         with pm.Model(coords=coordinates) as model:
 
             # Alleles indicates if each strain has the alternate (1) or reference (0) allele
             # at each site. Beta priors for the probability of each strain having the alternate 
             # allele
-            allele_alpha = [1]*len(coverages)
-            allele_beta = [10 if x!=query else 1 for x in coverages]
-            allele_priors = pm.Beta("allele_priors", alpha=allele_alpha, beta=allele_beta, dims="strains")
-            alleles = pm.Bernoulli("alleles", p=allele_priors, dims=["sites", "strains"])
-            # Define the binomial distribution parameters
-            nb_mu = pm.Poisson("nb_mu", mu=coverages_pt, dims="strains")
+            query_allele_prior = pm.Beta("query_allele_prior", alpha=1, beta=1)
+            query_allele = pm.Bernoulli("query_allele", p=query_allele_prior, dims="sites")[sample_ids]
 
-            #nb_alpha = 0.5 #pm.Beta("nb_alpha", alpha=1, beta=1)
-            # Define the negative binomial for the alt allele
-            alt_trials = pm.math.sum(nb_mu*pm.math.abs((is_ref-alleles[sample_ids,:])), axis=1) + 1
-            #alt_trials = alt_trials + pm.Poisson("noise", mu=10, dims="sites")[sample_ids]
-            #pm.NegativeBinomial("nb", n=alt_trials, p=nb_alpha, observed=samples)
-            pm.Poisson("nb", mu=alt_trials, observed=samples)
+            bgd_aln_prior = pm.Beta("bgd_aln_prior", alpha=1, beta=10, dims="strains")
+            bgd_aln = pm.Bernoulli("bgd_aln", p=bgd_aln_prior, dims=["sites", "strains"])[sample_ids,:]
+            bgd_allele = pm.Bernoulli("bgd_allele", p=0.5, dims=["sites", "strains"])[sample_ids,:]
+
+            # Effective depth of coverage of the background and query strains
+            query_coverage = pm.Poisson("query_coverage", mu=coverages[query])
+            bgd_coverage = pm.Poisson("bgd_coverage", mu=bgd_coverages, dims="strains")
+
+            # Total expected number of reads
+            query_n_reads = (is_ref*query_allele+(1-is_ref)*(1-query_allele))*query_coverage
+            bkg_switch = (is_ref[:,np.newaxis]*bgd_allele+(1-is_ref[:,np.newaxis])*(1-bgd_allele))
+            bkg_n_reads = pm.math.sum(bgd_aln*bkg_switch*bgd_coverage[np.newaxis,:], axis=1)
+            n_reads = query_n_reads + bkg_n_reads + 1
+            
+            pm.Poisson("likelihood", mu=n_reads, observed=samples)
 
             self.sampling_results = pm.sample(chains=self.chains, draws=self.draws, 
                 random_seed=self.random_state, tune=self.burn_in, cores=self.threads,
@@ -72,15 +78,14 @@ class BaseCountFilter:
         if not hasattr(self, "sampling_results"):
             raise RuntimeError("The model must be fitted prior to calling \"get_allele_p()\".")
         
-        return self.sampling_results["posterior"]["alleles"] \
+        return self.sampling_results["posterior"]["query_allele"] \
             .mean(dim=["draw", "chain"]) \
-            .sel({"strains":strain}) \
-            .to_dataframe().alleles
+            .to_dataframe().query_allele
 
-    def __get_coordinates(self, coverages: dict, bc: pd.Series) -> dict:
+    def __get_coordinates(self, query: str, coverages: dict, bc: pd.Series) -> dict:
         
         return {
-            "strains": [x for x in coverages], 
+            "strains": [x for x in coverages if x!= query], 
             "alleles": ["ref", "alt"],
             "sites": bc.index.to_list()
         }
