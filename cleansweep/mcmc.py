@@ -1,3 +1,4 @@
+#%%
 from functools import partial
 from typing import Union
 import numpy as np
@@ -18,7 +19,7 @@ class BaseCountFilter:
     bias: float = 0.5
     threads: Union[int, None] = 4
     engine: str = "pymc"
-
+    
     def fit(self, vcf: pd.DataFrame, coverages: dict, query: str) -> pd.DataFrame:
 
         coordinates = self.__get_coordinates(coverages, vcf.alt_bc)
@@ -35,14 +36,19 @@ class BaseCountFilter:
             # Alleles indicates if each strain has the alternate (1) or reference (0) allele
             # at each site. Beta priors for the probability of each strain having the alternate 
             # allele
-            allele_priors = pm.Beta("allele_priors", alpha=1, beta=1, dims="strains")
+            allele_alpha = [1]*len(coverages)
+            allele_beta = [10 if x!=query else 1 for x in coverages]
+            allele_priors = pm.Beta("allele_priors", alpha=allele_alpha, beta=allele_beta, dims="strains")
             alleles = pm.Bernoulli("alleles", p=allele_priors, dims=["sites", "strains"])
             # Define the binomial distribution parameters
             nb_mu = pm.Poisson("nb_mu", mu=coverages_pt, dims="strains")
-            nb_alpha = pm.Beta("nb_alpha", alpha=1, beta=1)
+
+            #nb_alpha = 0.5 #pm.Beta("nb_alpha", alpha=1, beta=1)
             # Define the negative binomial for the alt allele
             alt_trials = pm.math.sum(nb_mu*pm.math.abs((is_ref-alleles[sample_ids,:])), axis=1) + 1
-            pm.NegativeBinomial("nb", n=alt_trials, p=nb_alpha, observed=samples)
+            #alt_trials = alt_trials + pm.Poisson("noise", mu=10, dims="sites")[sample_ids]
+            #pm.NegativeBinomial("nb", n=alt_trials, p=nb_alpha, observed=samples)
+            pm.Poisson("nb", mu=alt_trials, observed=samples)
 
             self.sampling_results = pm.sample(chains=self.chains, draws=self.draws, 
                 random_seed=self.random_state, tune=self.burn_in, cores=self.threads,
@@ -51,6 +57,7 @@ class BaseCountFilter:
         # Return the probabilities of the query having the alternate allele
         return self.get_allele_p(query)
     
+
     def filter(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
         return vcf[self.get_allele_p(self.query).ge(self.bias)]
@@ -77,3 +84,4 @@ class BaseCountFilter:
             "alleles": ["ref", "alt"],
             "sites": bc.index.to_list()
         }
+# %%
