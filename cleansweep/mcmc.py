@@ -37,22 +37,27 @@ class BaseCountFilter:
             # Alleles indicates if each strain has the alternate (1) or reference (0) allele
             # at each site. Beta priors for the probability of each strain having the alternate 
             # allele
-            query_allele_prior = pm.Beta("query_allele_prior", alpha=1, beta=1)
+            query_allele_prior = pm.Beta("query_allele_prior", alpha=1, beta=5)
             query_allele = pm.Bernoulli("query_allele", p=query_allele_prior, dims="sites")[sample_ids]
 
-            bgd_aln_prior = pm.Beta("bgd_aln_prior", alpha=1, beta=10, dims="strains")
-            bgd_aln = pm.Bernoulli("bgd_aln", p=bgd_aln_prior, dims=["sites", "strains"])[sample_ids,:]
-            bgd_allele = pm.Bernoulli("bgd_allele", p=0.5, dims=["sites", "strains"])[sample_ids,:]
+            bgd_alt_allele_prior = pm.Beta("bgd_alt_allele_prior", alpha=2, beta=1, dims="strains")
+            bgd_ref_allele_prior = pm.Beta("bgd_ref_allele_prior", alpha=2, beta=1, dims="strains")
+            bgd_alt_allele = pm.Bernoulli("bgd_alt_allele", p=bgd_alt_allele_prior, dims=["sites", "strains"])[sample_ids,:]
+            bgd_ref_allele = pm.Bernoulli("bgd_ref_allele", p=bgd_ref_allele_prior, dims=["sites", "strains"])[sample_ids,:]
 
             # Effective depth of coverage of the background and query strains
             query_coverage = pm.Poisson("query_coverage", mu=coverages[query])
-            bgd_coverage = pm.Poisson("bgd_coverage", mu=bgd_coverages, dims="strains")
+            bgd_coverage = bgd_coverages #pm.Poisson("bgd_coverage", mu=bgd_coverages, dims="strains")
+
+            # Offset
+            offset_prior = 10 #pm.Beta("offset_prior", alpha=1, beta=100)*2*coverages[query]
+            offset = pm.Poisson("offset", mu=offset_prior, dims=["sites"])[sample_ids]
 
             # Total expected number of reads
-            query_n_reads = (is_ref*query_allele+(1-is_ref)*(1-query_allele))*query_coverage
-            bkg_switch = (is_ref[:,np.newaxis]*bgd_allele+(1-is_ref[:,np.newaxis])*(1-bgd_allele))
-            bkg_n_reads = pm.math.sum(bgd_aln*bkg_switch*bgd_coverage[np.newaxis,:], axis=1)
-            n_reads = query_n_reads + bkg_n_reads + 1
+            query_n_reads = (is_ref*(1-query_allele)+(1-is_ref)*query_allele)*query_coverage
+            bkg_switch = (is_ref[:,np.newaxis]*bgd_ref_allele+(1-is_ref[:,np.newaxis])*bgd_alt_allele)
+            bkg_n_reads = pm.math.sum(bkg_switch*bgd_coverage[np.newaxis,:], axis=1)
+            n_reads = query_n_reads + bkg_n_reads + 1 + offset
             
             pm.Poisson("likelihood", mu=n_reads, observed=samples)
 
