@@ -19,6 +19,19 @@ class FilterCmd(Subcommand):
         parser.add_argument("query", type=str, help="ID of the query strain, as it \
 appears in the alignment files.")
         parser.add_argument("output", type=str, help="Output directory.")
+        parser.add_argument("--coverage_min_p", "-p", type=float, default=0.1, help="Controls the filtering \
+of high-coverage variants. Greater values lead to more variants being excluded. Must be a value between 0 (do \
+not perform coverage-based filtering) and 1. The default is 0.1.")
+        parser.add_argument("--min_alt_bc", "-a", type=int, default=10, help="Minimum alternate \
+allele base count for a variant to pass the CleanSweep filters. The default is 10.")
+        parser.add_argument("--min_ref_bc", "-r", type=int, default=10, help="Variants with fewer than \
+this number of reference allele base counts pass the CleanSweep filters automatically.")
+        parser.add_argument("--min_ambiguity", "-am", type=float, default=0.0, help="If less than this \
+proportion of variants are considered ambiguous by Pilon, skips the base count filter and uses the Pilon \
+filters. Defaults to 0 (always apply the base count filter).")
+        parser.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
+Pilon output VCF file used to fit the CleanSweep filters. If a float, uses that proportion of lines. Defaults \
+to 500.")        
         parser.add_argument("--coverages", "-c", type=str, help="Table of depth of coverages per \
 reference strain, obtained with \"samtools coverage\".", required=True)
         parser.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
@@ -41,6 +54,11 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         input: FilePath,
         query: str,
         coverages: FilePath,
+        coverage_min_p: float,
+        min_alt_bc: int,
+        min_ref_bc: int,
+        min_ambiguity: float,
+        downsample: Union[int, float],
         seed: int,
         n_chains: int,
         n_draws: int,
@@ -63,11 +81,17 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
             vcf = input_loader.vcf, 
             coverages = input_loader.coverages,
             query_name = query,
+            coverage_min_p = coverage_min_p,
+            min_alt_bc = min_alt_bc,
+            min_ref_bc = min_ref_bc,
+            min_ambiguity = min_ambiguity,
+            downsampling = downsample,
             chains = n_chains,
             draws = n_draws,
             burn_in = n_burnin,
             bias = bias,
-            threads = threads
+            threads = threads,
+            engine = engine
         )
 
         # Save the output VCF DataFrame
