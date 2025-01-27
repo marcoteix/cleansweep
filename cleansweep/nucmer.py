@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Iterable
 from cleansweep.typing import File, Directory
 from Bio import SeqIO
 import subprocess
@@ -222,4 +222,3 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
             )
         
         return "".join(masked_s)
-    

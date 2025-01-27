@@ -5,7 +5,7 @@ from cleansweep.cli.commands import Subcommand
 from cleansweep.nucmer import NucmerAlignment
 from cleansweep.typing import File, Directory
 
-class FilterCmd(Subcommand):
+class PrepareCmd(Subcommand):
     """Prepares a reference for alignment by masking regions in background strains that align
     to the strain of interest.
 

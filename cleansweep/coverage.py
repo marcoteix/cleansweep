@@ -1,15 +1,19 @@
 from functools import partial
-from sklearn.mixture import GaussianMixture
+from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
 from sklearn.mixture import BayesianGaussianMixture as DPGMM
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import pandas as pd
 import numpy as np
-from typing import List, Union, Collection, Callable, Any
+from typing import List, Tuple, Union, Collection, Callable, Any
 from cleansweep.vcf import VCF, get_info_value
+from cleansweep.typing import File
 from warnings import warn
 from scipy.stats import norm, multivariate_normal, poisson, rv_continuous
 from numpy.typing import ArrayLike
+from dataclasses import dataclass
+import subprocess
+import io
 
 class CoverageFilter:
 
@@ -109,3 +113,86 @@ class CoverageFilter:
             return vcf.assign(total_depth=vcf["info"] \
                 .apply(partial(get_info_value, tag="TD", dtype=int)))
         else: return vcf
+
+@dataclass
+class CoverageEstimator:
+
+    random_state: int = 23
+
+    def read(
+        self,
+        vcf: File
+    ) -> ArrayLike:
+        
+        # Load downsampled VCF 
+        vcf_df = pd.read_table(
+            vcf, 
+            comment="#", 
+            sep="\t", 
+            header=None
+        )
+        
+        # Exctract depth of coverage at each position
+        self.depths = vcf_df[7].apply(
+            partial(
+                get_info_value,
+                tag = "TD",
+                dtype = int
+            )
+        ).values
+
+        return self.depths
+    
+    def estimate(
+        self,
+        depths: ArrayLike,
+        **kwargs
+    ) -> Tuple[float, float]:
+        
+        # Z-scale depths 
+        self.scaler = StandardScaler()
+        scaled_depths = self.scaler \
+            .fit_transform(
+                depths.reshape(-1, 1)
+            )
+        
+        initial_means = self.scaler.transform(
+            np.array(
+                [1, np.max(depths)]
+            ).reshape(-1, 1)
+        )
+
+        # Fit 2-component GMM
+        self.gmm = BayesianGaussianMixture(
+            n_components = 5,
+            random_state = self.random_state,
+            weight_concentration_prior = 1e-5,
+            max_iter = 10000,
+            **kwargs
+        )
+        self.gmm.fit(scaled_depths)
+
+        # Set the lowest component mean as the estimated depth of coverage
+        mean_coverage = np.min(self.gmm.means_)
+
+        # Set the background coverage as the mean of the component with the most
+        # weight, excluding the component assigned to the "true" coverage
+        idx_max = np.argmax(
+            self.gmm.weight_concentration_[0][
+                self.gmm.means_.flatten() != mean_coverage
+            ]
+        )
+        background_coverage = self.gmm.means_ \
+            .flatten()[ 
+                self.gmm.means_ \
+                    .flatten() != mean_coverage
+            ][idx_max]
+        
+        # Re-scale back
+        mean_coverage = self.scaler \
+            .inverse_transform([[mean_coverage]])[0,0]
+        
+        background_coverage = self.scaler \
+            .inverse_transform([[background_coverage]])[0,0]
+        
+        return mean_coverage, background_coverage

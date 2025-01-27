@@ -20,159 +20,300 @@ class BaseCountFilter:
     bias: float = 0.5
     threads: Union[int, None] = 4
     engine: str = "pymc"
+    n_components: int = 5
+    concentration: Union[float, None] = None
 
-    def fit_mcmc2(self, vcf: pd.DataFrame, coverages: dict, query: str, downsampling: Union[int, float] = 1.0) -> pd.Series:
+    def fit_mcmc(
+        self, 
+        vcf: pd.DataFrame, 
+        coverages: dict, 
+        query: str, 
+        query_coverage_estimate: float,
+        background_coverage_estimate: float,
+        downsampling: Union[int, float] = 1.0,
+    ) -> pd.Series:
 
         # Downsample the VCF file
-        vcf_fit = self.__downsample_vcf(vcf, n_lines=downsampling)
+        vcf_fit = self.__downsample_vcf(
+            vcf, 
+            n_lines = downsampling
+        )
 
-        coordinates = self.__get_coordinates(query, coverages, vcf_fit.alt_bc)
+        coordinates = self.__get_coordinates(
+            coverages, 
+        )
         self.query = query
-
-        ambiguity_factor = vcf_fit["filter"].eq("PASS").sum()/len(vcf_fit)
-        ambiguity_factor = np.maximum(ambiguity_factor, 1/3)
-        print(ambiguity_factor)
 
         with pm.Model(coords=coordinates) as model:
 
-            model.add_coord("sites", vcf_fit.index.to_list(), mutable=True)
-            alt = pm.MutableData("alt", vcf_fit.alt_bc.values, dims="sites")
+            model.add_coord(
+                "sites", 
+                vcf_fit.index.to_list(), 
+                mutable=True
+            )
+            alt = pm.MutableData(
+                "alt", 
+                vcf_fit.alt_bc.values, 
+                dims = "sites"
+            )
 
-            alleles = pm.Bernoulli("alleles", p=ambiguity_factor, dims="sites")
-            query_coverage = pm.NegativeBinomial("query_coverage", n=coverages[query]*ambiguity_factor, p=.6)
-            query_overdispersion = pm.Beta("query_overdispersion", alpha=20, beta=20, initval=0.5)
-            query_bc = pm.NegativeBinomial.dist(n=query_coverage, p=query_overdispersion)
+            alt_prob = pm.Beta(
+                "alt_prob",
+                alpha = 1,
+                beta = 1
+            )
 
-            overdispersion = pm.Beta("overdispersion", alpha=20, beta=20, initval=0.5)
-            background_prior = pm.NegativeBinomial("background_prior", n=coverages[query]*1.5, p=0.6) + 1
-            background = pm.NegativeBinomial.dist(n=background_prior, p=overdispersion)
+            alleles = pm.Bernoulli(
+                "alleles", 
+                p = alt_prob, 
+                dims="sites"
+            )
+
+            query_overdispersion = pm.Beta(
+                "query_overdispersion", 
+                alpha = 20, 
+                beta = 20, 
+                initval = 0.5
+            )
+
+            query = pm.NegativeBinomial.dist(
+                n = query_coverage_estimate, 
+                p = query_overdispersion
+            )
+
+            background_overdispersion = pm.Beta(
+                "background_overdispersion", 
+                alpha=20, 
+                beta=20, 
+                initval=0.5
+            )
+            zero_inflation = pm.Beta(
+                "zero_inflation",
+                alpha = 1,
+                beta = 1
+            )
+            background = pm.ZeroInflatedNegativeBinomial.dist(
+                n = background_coverage_estimate, 
+                p = background_overdispersion,
+                psi = zero_inflation
+            )
             
             likelihood = pm.Mixture(
                 "likelihood",
-                w = pm.math.switch(alleles[:,np.newaxis], pt.as_tensor([[1,0]]*len(vcf_fit)), pt.as_tensor([[0,1]]*len(vcf_fit))),
-                comp_dists = [query_bc, background],
+                w = pm.math.switch(
+                    alleles[:,np.newaxis], 
+                    pt.as_tensor(
+                        [[1,0]]*len(vcf_fit)
+                    ), 
+                    pt.as_tensor(
+                        [[0,1]]*len(vcf_fit)
+                    )
+                ),
+                comp_dists = [query, background],
                 observed = alt
             )
 
-            self.sampling_results = pm.sample(chains=self.chains, draws=self.draws, 
-                random_seed=self.random_state, tune=self.burn_in, cores=self.threads,
-                nuts_sampler=self.engine)
+            self.sampling_results = pm.sample(
+                chains=self.chains, 
+                draws=self.draws, 
+                random_seed=self.random_state, 
+                tune=self.burn_in, 
+                cores=self.threads,
+                nuts_sampler=self.engine
+            )
             
             # Predict for the full data 
-            alt_p = self.get_posterior(vcf, self.sampling_results, ambiguity_factor)
+            alt_p = self.get_posterior(
+                vcf, 
+                self.sampling_results, 
+                query_coverage_estimate,
+                background_coverage_estimate
+            )
             
-        return alt_p           
-
-    def fit_mcmc(self, vcf: pd.DataFrame, coverages: dict, query: str, downsampling: Union[int, float] = 1.0) -> pd.Series:
-
-        # Downsample the VCF file
-        vcf_fit = self.__downsample_vcf(vcf, n_lines=downsampling)
-
-        coordinates = self.__get_coordinates(query, coverages, vcf_fit.alt_bc)
-        self.query = query
-
-        ambiguity_factor = vcf_fit["filter"].eq("PASS").sum()/len(vcf_fit)
-        ambiguity_factor = np.maximum(ambiguity_factor, 1/3)
-
-        with pm.Model(coords=coordinates) as model:
-
-            model.add_coord("sites", vcf_fit.index.to_list(), mutable=True)
-            samples = pm.MutableData("samples", vcf_fit.alt_bc.values, dims="sites")
-
-            alleles = pm.Bernoulli("alleles", p=ambiguity_factor, dims="sites")
-            query_coverage = pm.Poisson("query_coverage", mu=coverages[query]*ambiguity_factor)
-            query_overdispersion = pm.Beta("query_overdispersion", alpha=1, beta=1, initval=0.5)
-            query_bc = pm.NegativeBinomial("query_bc", n=query_coverage, 
-                p=query_overdispersion, dims="sites")
-
-            zi_prior = pm.Beta("zi_prior", alpha=1, beta=1, initval=0.5)
-            overdispersion = pm.Beta("overdispersion", alpha=1, beta=1, initval=0.5)
-            background_prior = pm.Poisson("background_prior", mu=coverages[query]) + 1
-            background = pm.ZeroInflatedNegativeBinomial(
-                "background", psi=zi_prior, n=background_prior, 
-                p=overdispersion, dims="sites")
+        return alt_p                     
             
-            n_reads = alleles*query_bc + (1-alleles)*background
+    def get_conditional_posterior(
+        self, 
+        observed: pd.DataFrame, 
+        sampling_results, 
+        query_coverage_estimate: float,
+        background_coverage_estimate: float,
+        column: str = "alt_bc"
+    ) -> pd.Series:
 
-            # Errors are normally distributed
-            #error_sd = pm.Gamma("error_sd", alpha=1, beta=5) + .01
-            #likelihood = pm.Normal("likelihood", mu=n_reads, sigma=error_sd, observed=samples)
+        # Build base count distributions for true and false variants based on the MCMC results
+        dist_params = self.__get_distribution_params(sampling_results)
 
-            likelihood = pm.Poisson("likelihood", mu=n_reads, observed=samples)
+        dist_query = pm.NegativeBinomial.dist(
+            n = query_coverage_estimate,
+            p = dist_params["query_overdispersion"]
+        )
+        query_logp = np.maximum(
+            pm.logp(
+                dist_query, 
+                observed[column].values
+            ).eval(),
+            -1e6
+        )
 
-            self.sampling_results = pm.sample(chains=self.chains, draws=self.draws, 
-                random_seed=self.random_state, tune=self.burn_in, cores=self.threads,
-                nuts_sampler=self.engine)
-            
-            # Predict for the full data 
-            alt_p = self.get_posterior(vcf, self.sampling_results, ambiguity_factor)
-            
-        return alt_p
-            
-    def fit(self, vcf: pd.DataFrame, coverages: dict, query: str, downsampling: Union[int, float] = 1.0) -> pd.Series:
+        dist_background = pm.ZeroInflatedNegativeBinomial.dist(
+            n = background_coverage_estimate,
+            p = dist_params["background_overdispersion"],
+            psi = dist_params["zero_inflation"]
+        )
+        background_logp = np.maximum(
+            pm.logp(
+                dist_background, 
+                observed[column].values
+            ).eval(),
+            -1e6
+        )
 
-        # Probability of the query having the alternate allele, given the alternate allele base count
-        alt_p = self.fit_mcmc(vcf, coverages, query, downsampling=downsampling)
+        prior = dist_params["alt_prob"]
+        if prior == "ref_bc":
+            prior = 1 - prior
+        
+        norm = (
+            np.exp(query_logp)*prior
+        ) + (
+            np.exp(background_logp)*(1-prior)
+        )
 
-        self.prob = alt_p
-        return self.prob
+        return pd.Series(
+            np.exp(query_logp)*prior/norm, 
+            index = observed.index
+        ) 
     
-    def __get_distribution_params(self, sampling_results) -> dict:
+    def query_cdf(
+        self,
+        observed: pd.DataFrame, 
+        sampling_results, 
+        query_coverage_estimate: float,
+        column: str
+    ) -> pd.Series:
+        
+        # Build base count distributions for query alleles based on the MCMC results
+        dist_params = self.__get_distribution_params(sampling_results)        
+        
+        # Get the CDF for each reference allele base count
+        dist_query = pm.NegativeBinomial.dist(
+            n = query_coverage_estimate,
+            p = dist_params["query_overdispersion"]
+        )
+        query_cdf = np.exp(
+            np.maximum(       
+                pm.logcdf(
+                    dist_query, 
+                    observed[column].values
+                ).eval(),
+                -1e6
+            )
+        )
+
+        return pd.Series(
+            query_cdf,
+            index = observed.index
+        )
+    
+    def get_posterior(
+        self, 
+        observed: pd.DataFrame, 
+        sampling_results, 
+        query_coverage_estimate: float,
+        background_coverage_estimate: float,
+    ) -> pd.Series:
+
+        prob = {
+            k: self.get_conditional_posterior(
+                observed,
+                sampling_results,
+                query_coverage_estimate,
+                background_coverage_estimate,
+                column = k
+            ) for k in [
+                "ref_bc",
+                "alt_bc"
+            ]
+        }
+
+        # Get the CDF for the reference allele under the distribution
+        # of query allele depths
+        reference_cdf = self.query_cdf(
+            observed, 
+            sampling_results,
+            query_coverage_estimate,
+            "ref_bc"
+        )
+        # Check which sites originate from the distribution 
+        # (p > 0.025 and p < 0.975)
+        ref_evidence = (
+            reference_cdf.gt(.025) & \
+            reference_cdf.lt(0.975)
+        )
+
+        # Now do the same for the alternate allele
+        alternate_cdf = self.query_cdf(
+            observed, 
+            sampling_results,
+            query_coverage_estimate,
+            "alt_bc"
+        )
+        alt_evidence = (
+            alternate_cdf.lt(0.95)
+        )
+
+        # How many sites have evidence for the reference allele but 
+        # not the alternate allele?
+        prop_ref_sites = (
+            ref_evidence & \
+            ~alt_evidence
+        ).mean()
+
+        # If more than 10%, exclude sites with ref_bc originating 
+        # from the distribution of query allele depths
+        #if prop_ref_sites > 0.05:
+        prob["alt_bc"][~alt_evidence] = 0.0
+
+        return prob["alt_bc"]
+
+    def __get_distribution_params(
+        self, 
+        sampling_results
+    ) -> dict:
 
         posterior = sampling_results["posterior"]
         return {
             k: float(posterior[k].mean(dim=["chain", "draw"]))
-            for k in ["query_coverage", "query_overdispersion", "zi_prior",
-                "overdispersion", "background_prior"]
+            for k in [
+                "query_overdispersion", 
+                "zero_inflation",
+                "background_overdispersion",
+                "alt_prob"
+            ]
         }
-    
-    def get_posterior2(self, observed: pd.DataFrame, sampling_results, ambiguity_factor: float) -> pd.Series:
 
-        # Build base count distributions for true and false variants based on the MCMC results
-        dist_params = self.__get_distribution_params(sampling_results)
+    def fit(
+        self, 
+        vcf: pd.DataFrame, 
+        coverages: dict, 
+        query: str, 
+        query_coverage_estimate: float,
+        background_coverage_estimate: float,
+        downsampling: Union[int, float] = 1.0        
+    ) -> pd.Series:
 
-        dist_query = pm.NegativeBinomial.dist(
-            n = dist_params["query_coverage"],
-            p = dist_params["query_overdispersion"]
+        # Probability of the query having the alternate allele, given the alternate allele base count
+        self.prob = self.fit_mcmc(
+            vcf,
+            coverages,
+            query,
+            query_coverage_estimate = query_coverage_estimate,
+            background_coverage_estimate = background_coverage_estimate,
+            downsampling = downsampling
         )
-        query_logp = pm.logp(dist_query, observed.alt_bc.values).eval()
 
-        dist_background = pm.NegativeBinomial.dist(
-            n = dist_params["background_prior"],
-            p = dist_params["overdispersion"]
-        )
-        background_logp = pm.logp(dist_background, observed.alt_bc.values).eval()
+        return self.prob
 
-        prior = ambiguity_factor
-        
-        norm = np.exp(query_logp)*prior + np.exp(background_logp)*(1-prior)
-
-        return pd.Series(np.exp(query_logp)*prior/norm, index=observed.index)
-    
-    def get_posterior(self, observed: pd.DataFrame, sampling_results, ambiguity_factor: float) -> pd.Series:
-
-        # Build base count distributions for true and false variants based on the MCMC results
-        dist_params = self.__get_distribution_params(sampling_results)
-
-        dist_query = pm.NegativeBinomial.dist(
-            n = dist_params["query_coverage"],
-            p = dist_params["query_overdispersion"]
-        )
-        query_logp = pm.logp(dist_query, observed.alt_bc.values).eval()
-
-        dist_background = pm.ZeroInflatedNegativeBinomial.dist(
-            psi = dist_params["zi_prior"],
-            n = dist_params["background_prior"],
-            p = dist_params["overdispersion"]
-        )
-        background_logp = pm.logp(dist_background, observed.alt_bc.values).eval()
-
-        prior = ambiguity_factor
-        
-        norm = np.exp(query_logp)*prior + np.exp(background_logp)*(1-prior)
-
-        return pd.Series(np.exp(query_logp)*prior/norm, index=observed.index)
-    
     def filter(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
         return vcf[self.prob.ge(self.bias)]
@@ -181,28 +322,33 @@ class BaseCountFilter:
 
         self.fit(vcf, coverages=coverages, query=query)
         return self.filter(vcf)
-    
-    def get_allele_p(self, sampling_results) -> pd.Series:
 
-        if not hasattr(self, "sampling_results"):
-            raise RuntimeError("The model must be fitted prior to calling \"get_allele_p()\".")
-        
-        return sampling_results["posterior"]["alleles"] \
-            .mean(dim=["draw", "chain"]) \
-            .to_dataframe().alleles
-
-    def __get_coordinates(self, query: str, coverages: dict, bc: pd.Series) -> dict:
+    def __get_coordinates(
+        self, 
+        coverages: dict, 
+    ) -> dict:
         
         return {
             "strains": [x for x in coverages], 
             "alleles": ["ref", "alt"]
         }
     
-    def __downsample_vcf(self, vcf: pd.DataFrame, n_lines: Union[int, float]) -> pd.DataFrame:
+    def __downsample_vcf(
+        self, 
+        vcf: pd.DataFrame, 
+        n_lines: Union[int, float]
+    ) -> pd.DataFrame:
 
         if n_lines <= 1:
             n_lines = int(len(vcf) * n_lines)
-        n_lines_ = np.minimum(len(vcf), int(n_lines))
+        n_lines_ = np.minimum(
+            len(vcf), 
+            int(n_lines)
+        )
 
-        return vcf.sample(n_lines_, replace=False, random_state=self.random_state)
+        return vcf.sample(
+            n_lines_, 
+            replace = False, 
+            random_state = self.random_state
+        )
 # %%

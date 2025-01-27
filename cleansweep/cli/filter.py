@@ -48,12 +48,15 @@ value between 0 and 1. Defaults to 0.5.")
 MCMC. Defaults to 1.")
         parser.add_argument("--engine", "-e", type=str, default="pymc", choices=["pymc", "numpyro", "nutpie"], 
 help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
+        parser.add_argument("--downsampled-vcf", "-v", type=str, help="Downsampled VCF file with a subset of \
+the full Pilon output VCF, containing sites in the query.", required=True)
           
     def run(
         self,
         input: FilePath,
         query: str,
         coverages: FilePath,
+        downsampled_vcf: FilePath,
         coverage_min_p: float,
         min_alt_bc: int,
         min_ref_bc: int,
@@ -73,7 +76,11 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         outdir.mkdir(parents=False, exist_ok=True)
 
         # Read input files
-        input_loader = InputLoader().load(vcf=input, coverage=coverages, query=query)
+        input_loader = InputLoader().load(
+            vcf=input, 
+            coverage=coverages, 
+            query=query
+        )
 
         # Filter
         vcf_filter = VCFFilter(random_state = seed)
@@ -81,6 +88,7 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
             vcf = input_loader.vcf, 
             coverages = input_loader.coverages,
             query_name = query,
+            downsampled_vcf = downsampled_vcf,
             coverage_min_p = coverage_min_p,
             min_alt_bc = min_alt_bc,
             min_ref_bc = min_ref_bc,
