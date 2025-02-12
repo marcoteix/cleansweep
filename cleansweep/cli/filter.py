@@ -19,9 +19,10 @@ class FilterCmd(Subcommand):
         parser.add_argument("query", type=str, help="ID of the query strain, as it \
 appears in the alignment files.")
         parser.add_argument("output", type=str, help="Output directory.")
-        parser.add_argument("--coverage_min_p", "-p", type=float, default=0.1, help="Controls the filtering \
-of high-coverage variants. Greater values lead to more variants being excluded. Must be a value between 0 (do \
-not perform coverage-based filtering) and 1. The default is 0.1.")
+        parser.add_argument("--min_depth", "-dp", type=int, default=5, help="Minimum depth of coverage \
+for a site to be considered when filtering SNPs. SNPs at sites with fewer than this number of reads \
+in pileups are automatically excluded and these sites are also ignored when estimating the depth of \
+coverage for the query strain.")
         parser.add_argument("--min_alt_bc", "-a", type=int, default=10, help="Minimum alternate \
 allele base count for a variant to pass the CleanSweep filters. The default is 10.")
         parser.add_argument("--min_ref_bc", "-r", type=int, default=10, help="Variants with fewer than \
@@ -32,8 +33,6 @@ filters. Defaults to 0 (always apply the base count filter).")
         parser.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
 Pilon output VCF file used to fit the CleanSweep filters. If a float, uses that proportion of lines. Defaults \
 to 500.")        
-        parser.add_argument("--coverages", "-c", type=str, help="Table of depth of coverages per \
-reference strain, obtained with \"samtools coverage\".", required=True)
         parser.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
         parser.add_argument("--n_chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
 Defaults to 5.")
@@ -58,10 +57,9 @@ Can be generated with the show-snps subcommand of nucmer.", required=True)
         self,
         input: FilePath,
         query: str,
-        coverages: FilePath,
         downsampled_vcf: FilePath,
         nucmer_snps: Iterable[FilePath],
-        coverage_min_p: float,
+        min_depth: int,
         min_alt_bc: int,
         min_ref_bc: int,
         min_ambiguity: float,
@@ -82,7 +80,6 @@ Can be generated with the show-snps subcommand of nucmer.", required=True)
         # Read input files
         input_loader = InputLoader().load(
             vcf=input, 
-            coverage=coverages, 
             query=query
         )
 
@@ -90,11 +87,9 @@ Can be generated with the show-snps subcommand of nucmer.", required=True)
         vcf_filter = VCFFilter(random_state = seed)
         vcf_out = vcf_filter.fit(
             vcf = input_loader.vcf, 
-            coverages = input_loader.coverages,
-            query_name = query,
             downsampled_vcf = downsampled_vcf,
             nucmer_snps = nucmer_snps,
-            coverage_min_p = coverage_min_p,
+            min_depth = min_depth,
             min_alt_bc = min_alt_bc,
             min_ref_bc = min_ref_bc,
             min_ambiguity = min_ambiguity,
