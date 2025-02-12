@@ -119,17 +119,42 @@ class CoverageEstimator:
 
     random_state: int = 23
 
+    def fit(
+        self,
+        vcf: File,
+        n_lines: int = 100000,
+        min_depth: int = 0,
+        **kwargs
+    ) -> float:
+        
+        # Read depths from a VCF file
+        depths = self.read(
+            vcf = vcf,
+            n_lines = n_lines
+        )
+
+        # Remove NaNs
+        depths = depths[~np.isnan(depths)]
+        # Remove low coverage sites
+        depths = depths[depths >= min_depth]
+
+        query_coverage, _ = self.estimate(
+            depths,
+            **kwargs
+        )
+
+        return query_coverage
+
     def read(
         self,
-        vcf: File
+        vcf: File,
+        n_lines: int = 100000
     ) -> ArrayLike:
         
-        # Load downsampled VCF 
-        vcf_df = pd.read_table(
-            vcf, 
-            comment="#", 
-            sep="\t", 
-            header=None
+        # Load VCF and downsample
+        vcf_df = self.downsample_vcf(
+            vcf = vcf,
+            n_lines = n_lines
         )
         
         # Exctract depth of coverage at each position
@@ -196,3 +221,33 @@ class CoverageEstimator:
             .inverse_transform([[background_coverage]])[0,0]
         
         return mean_coverage, background_coverage
+
+    def downsample_vcf(
+        self,
+        vcf: File,
+        n_lines: int = 100000
+    ) -> pd.DataFrame:
+        
+        # Pick n_lines at random from the VCF file
+        view_cmd = ["bcftools", "view", "-H", str(vcf)]
+        shuf_cmd = ["shuf", "-n", str(n_lines)]
+
+        view = subprocess.Popen(
+            view_cmd,
+            stdout = subprocess.PIPE,
+            stderr = subprocess.PIPE
+        )
+        shuf = subprocess.check_output(
+            shuf_cmd,
+            stdin = view.stdout
+        )
+
+        # Read output as a DataFrame
+        return pd.read_table(
+            io.StringIO(
+                shuf.decode("utf-8")
+            ), 
+            comment="#", 
+            sep="\t", 
+            header=None
+        )

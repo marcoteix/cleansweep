@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import Union
+from typing import Iterable, Union
 from cleansweep.cli.commands import Subcommand
 from cleansweep.vcf import VCF
 from cleansweep.filter import VCFFilter
@@ -50,6 +50,9 @@ MCMC. Defaults to 1.")
 help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         parser.add_argument("--downsampled-vcf", "-v", type=str, help="Downsampled VCF file with a subset of \
 the full Pilon output VCF, containing sites in the query.", required=True)
+        parser.add_argument("--nucmer_snps", "-snp", type=str, nargs="+", help="List of SNPs detected by \
+nucmer between the reference sequence for the query strain and each of the background reference sequences. \
+Can be generated with the show-snps subcommand of nucmer.", required=True)
           
     def run(
         self,
@@ -57,6 +60,7 @@ the full Pilon output VCF, containing sites in the query.", required=True)
         query: str,
         coverages: FilePath,
         downsampled_vcf: FilePath,
+        nucmer_snps: Iterable[FilePath],
         coverage_min_p: float,
         min_alt_bc: int,
         min_ref_bc: int,
@@ -89,6 +93,7 @@ the full Pilon output VCF, containing sites in the query.", required=True)
             coverages = input_loader.coverages,
             query_name = query,
             downsampled_vcf = downsampled_vcf,
+            nucmer_snps = nucmer_snps,
             coverage_min_p = coverage_min_p,
             min_alt_bc = min_alt_bc,
             min_ref_bc = min_ref_bc,

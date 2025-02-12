@@ -20,8 +20,14 @@ class VCF:
 
         if isinstance(self.file, Path): self.file = str(self.file) 
 
-    def read(self, chrom: str, filters: Union[Collection[str], None]=None, include: Union[str, None]=None,
-        exclude: Union[str, None]=None) -> pd.DataFrame:
+    def read(
+        self, 
+        chrom: str, 
+        filters: Union[Collection[str], None] = None, 
+        include: Union[str, None]=None,
+        exclude: Union[str, None]=None,
+        add_base_counts: bool = True
+    ) -> pd.DataFrame:
         """Filters a VCF file (compressed or uncompressed) with bcftools. Requires bcftools.
 
         Args:
@@ -51,14 +57,20 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             raise RuntimeError(msg)
         
         # Store filtered VCF as an attribute
-        self.vcf = pd.read_csv(StringIO(rc.stdout.decode("utf-8")), sep="\t", comment="#", header=None)  
+        self.vcf = pd.read_csv(
+            StringIO(rc.stdout.decode("utf-8")), 
+            sep="\t", 
+            comment="#", 
+            header=None
+        )  
         self.vcf.columns = _VCF_HEADER[:self.vcf.shape[1]]
 
         # Keep variants in the query
         self.vcf = self.vcf[self.vcf.chrom.eq(chrom)]
 
-        self.vcf = self.remove_indels(self.vcf)
-        self.vcf = self.add_info_columns(self.vcf)
+        self.vcf = self.exclude_indels(self.vcf)
+        if add_base_counts:
+            self.vcf = self.add_info_columns(self.vcf)
 
         return self.vcf
 
@@ -67,6 +79,8 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         if vcf is None: 
             inplace = True
             vcf = self.vcf
+        else:
+            inplace = False
 
         vcf = vcf[vcf.ref.str.len().eq(1) & vcf.alt.str.len().eq(1)]
         if inplace: self.vcf = vcf
@@ -106,6 +120,24 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             vcf = vcf.assign(mapq = vcf["info"] \
                 .apply(partial(get_info_value, tag="MQ", dtype=int)))
             
+        if not hasattr(vcf, "depth"):
+            vcf = vcf.assign(mapq = vcf["info"] \
+                .apply(partial(get_info_value, tag="DP", dtype=int)))
+                        
+        # If a variant is missing alternate allele information, extract is from the base counts
+        vcf.loc[
+            vcf.alt.eq("."),
+            "alt"
+        ] = vcf[
+            vcf.alt.eq(".")
+        ].apply(
+            lambda x: self.__alt_from_base_counts(
+                x.base_counts,
+                x.ref
+            ),
+            axis = 1
+        )
+            
         return vcf.assign(
             alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
             ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
@@ -114,6 +146,28 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
     def remove_indels(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
         return vcf[vcf.alt.ne(".") & vcf.ref.ne(".")]
+    
+    def __alt_from_base_counts(
+        self,
+        base_counts: str,
+        ref: str
+    ) -> str:
+        
+        # Order of bases in the VCF BC tag
+        bases = ["A", "C", "G", "T"]
+        
+        # Convert base counts to int, setting the base count for the ref allele 
+        # to the lowest count
+        bc = [
+            int(x) if b != ref else -1
+            for x, b in zip(
+                base_counts.split(","), 
+                bases
+            ) 
+        ]
+
+        # Find the maximum base count (alt allele)
+        return bases[np.argmax(bc)]
     
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None

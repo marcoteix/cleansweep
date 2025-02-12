@@ -1,35 +1,34 @@
 #%%
-from functools import partial
-from typing import Literal, Union
+from typing import Union
 import numpy as np
 import pymc as pm
 from dataclasses import dataclass
 import pandas as pd
-from pytensor.printing import Print
-from typing_extensions import Self
 import pytensor.tensor as pt
-from numpy.typing import ArrayLike
 
 @dataclass
 class BaseCountFilter:
 
-    chains: int = 10
-    draws: int = 1000
-    burn_in: int = 100
+    chains: int = 5
+    draws: int = 100000
+    burn_in: int = 1000
     random_state: int = 23
-    bias: float = 0.5
-    threads: Union[int, None] = 4
+    power: float = 0.95
+    threads: Union[int, None] = 5
     engine: str = "pymc"
-    n_components: int = 5
-    concentration: Union[float, None] = None
+
+    def __post_init__(self):
+
+        # Convert power to quantiles
+        self.__quantiles = (
+            (1 - self.power)/2,
+            (1 + self.power)/2
+        )
 
     def fit_mcmc(
         self, 
         vcf: pd.DataFrame, 
-        coverages: dict, 
-        query: str, 
         query_coverage_estimate: float,
-        background_coverage_estimate: float,
         downsampling: Union[int, float] = 1.0,
     ) -> pd.Series:
 
@@ -39,10 +38,7 @@ class BaseCountFilter:
             n_lines = downsampling
         )
 
-        coordinates = self.__get_coordinates(
-            coverages, 
-        )
-        self.query = query
+        coordinates = self.__get_coordinates()
 
         with pm.Model(coords=coordinates) as model:
 
@@ -51,53 +47,59 @@ class BaseCountFilter:
                 vcf_fit.index.to_list(), 
                 mutable=True
             )
+
+            # Wrap alt allele base counts on a MutableData object to allow
+            # for predictive posterior checks
             alt = pm.MutableData(
                 "alt", 
                 vcf_fit.alt_bc.values, 
                 dims = "sites"
             )
 
+            # Probability of the query strain having the alternate allele
             alt_prob = pm.Beta(
                 "alt_prob",
                 alpha = 1,
                 beta = 1
             )
 
+            # Indicates if the query strain has the alt allele (1) or the 
+            # ref allele (0)
             alleles = pm.Bernoulli(
                 "alleles", 
                 p = alt_prob, 
                 dims="sites"
             )
 
+            # Models the overdispersion for the depth of coverage of the 
+            # query strain. Strong prior around 0.5 (approximates a Poisson
+            # distribution)
             query_overdispersion = pm.Beta(
                 "query_overdispersion", 
-                alpha = 20, 
-                beta = 20, 
+                alpha = 500, 
+                beta = 500, 
                 initval = 0.5
             )
 
+            # Model the depth of coverage at each position in the query
+            # strain as a Negative Binomial distribution
             query = pm.NegativeBinomial.dist(
                 n = query_coverage_estimate, 
                 p = query_overdispersion
             )
 
-            background_overdispersion = pm.Beta(
-                "background_overdispersion", 
-                alpha=20, 
-                beta=20, 
-                initval=0.5
+            # Model the background allele depth as a uniform distribution
+            max_bc = np.maximum(
+                vcf.alt_bc.max(),
+                vcf.ref_bc.max()
             )
-            zero_inflation = pm.Beta(
-                "zero_inflation",
-                alpha = 1,
-                beta = 1
-            )
-            background = pm.ZeroInflatedNegativeBinomial.dist(
-                n = background_coverage_estimate, 
-                p = background_overdispersion,
-                psi = zero_inflation
+
+            background = pm.Categorical.dist(
+                p = np.ones(max_bc) / max_bc,
             )
             
+            # Define the likelihood as a mixture, with weights given by the
+            # alleles assigned to the query strain
             likelihood = pm.Mixture(
                 "likelihood",
                 w = pm.math.switch(
@@ -113,6 +115,7 @@ class BaseCountFilter:
                 observed = alt
             )
 
+            # MCMC sampling
             self.sampling_results = pm.sample(
                 chains=self.chains, 
                 draws=self.draws, 
@@ -127,7 +130,6 @@ class BaseCountFilter:
                 vcf, 
                 self.sampling_results, 
                 query_coverage_estimate,
-                background_coverage_estimate
             )
             
         return alt_p                     
@@ -137,7 +139,6 @@ class BaseCountFilter:
         observed: pd.DataFrame, 
         sampling_results, 
         query_coverage_estimate: float,
-        background_coverage_estimate: float,
         column: str = "alt_bc"
     ) -> pd.Series:
 
@@ -156,10 +157,13 @@ class BaseCountFilter:
             -1e6
         )
 
-        dist_background = pm.ZeroInflatedNegativeBinomial.dist(
-            n = background_coverage_estimate,
-            p = dist_params["background_overdispersion"],
-            psi = dist_params["zero_inflation"]
+        max_bc = np.maximum(
+            observed.alt_bc.max(),
+            observed.ref_bc.max()
+        )
+
+        dist_background = pm.Categorical.dist(
+            p = np.ones(max_bc)/max_bc,
         )
         background_logp = np.maximum(
             pm.logp(
@@ -220,7 +224,6 @@ class BaseCountFilter:
         observed: pd.DataFrame, 
         sampling_results, 
         query_coverage_estimate: float,
-        background_coverage_estimate: float,
     ) -> pd.Series:
 
         prob = {
@@ -228,7 +231,6 @@ class BaseCountFilter:
                 observed,
                 sampling_results,
                 query_coverage_estimate,
-                background_coverage_estimate,
                 column = k
             ) for k in [
                 "ref_bc",
@@ -236,42 +238,22 @@ class BaseCountFilter:
             ]
         }
 
-        # Get the CDF for the reference allele under the distribution
-        # of query allele depths
-        reference_cdf = self.query_cdf(
-            observed, 
-            sampling_results,
-            query_coverage_estimate,
-            "ref_bc"
-        )
         # Check which sites originate from the distribution 
-        # (p > 0.025 and p < 0.975)
-        ref_evidence = (
-            reference_cdf.gt(.025) & \
-            reference_cdf.lt(0.975)
-        )
-
-        # Now do the same for the alternate allele
+        # (p > left_quantile and p < right_quantile)
         alternate_cdf = self.query_cdf(
             observed, 
             sampling_results,
             query_coverage_estimate,
             "alt_bc"
         )
+        # NOTE: May want to check only if <95%
         alt_evidence = (
-            alternate_cdf.lt(0.95)
+            alternate_cdf.gt(self.__quantiles[0]) & \
+            alternate_cdf.lt(self.__quantiles[1])
         )
 
-        # How many sites have evidence for the reference allele but 
-        # not the alternate allele?
-        prop_ref_sites = (
-            ref_evidence & \
-            ~alt_evidence
-        ).mean()
-
-        # If more than 10%, exclude sites with ref_bc originating 
-        # from the distribution of query allele depths
-        #if prop_ref_sites > 0.05:
+        # Exclude sites with an alt allele depth not originating from the
+        # distribution of depths of coverage for the query strain 
         prob["alt_bc"][~alt_evidence] = 0.0
 
         return prob["alt_bc"]
@@ -285,9 +267,7 @@ class BaseCountFilter:
         return {
             k: float(posterior[k].mean(dim=["chain", "draw"]))
             for k in [
-                "query_overdispersion", 
-                "zero_inflation",
-                "background_overdispersion",
+                "query_overdispersion",
                 "alt_prob"
             ]
         }
@@ -295,20 +275,14 @@ class BaseCountFilter:
     def fit(
         self, 
         vcf: pd.DataFrame, 
-        coverages: dict, 
-        query: str, 
         query_coverage_estimate: float,
-        background_coverage_estimate: float,
         downsampling: Union[int, float] = 1.0        
     ) -> pd.Series:
 
         # Probability of the query having the alternate allele, given the alternate allele base count
         self.prob = self.fit_mcmc(
             vcf,
-            coverages,
-            query,
             query_coverage_estimate = query_coverage_estimate,
-            background_coverage_estimate = background_coverage_estimate,
             downsampling = downsampling
         )
 
@@ -316,20 +290,27 @@ class BaseCountFilter:
 
     def filter(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
-        return vcf[self.prob.ge(self.bias)]
+        return vcf[self.prob.ge(0.5)]
     
-    def fit_filter(self, vcf: pd.DataFrame, coverages: dict, query: str) -> pd.DataFrame:
+    def fit_filter(
+        self, 
+        vcf: pd.DataFrame, 
+        query_coverage_estimate: float, 
+        downsampling: Union[int, float] = 1.0
+    ) -> pd.DataFrame:
 
-        self.fit(vcf, coverages=coverages, query=query)
+        self.fit(
+            vcf = vcf,
+            query_coverage_estimate = query_coverage_estimate,
+            downsampling = downsampling
+        )
         return self.filter(vcf)
 
     def __get_coordinates(
         self, 
-        coverages: dict, 
     ) -> dict:
         
         return {
-            "strains": [x for x in coverages], 
             "alleles": ["ref", "alt"]
         }
     

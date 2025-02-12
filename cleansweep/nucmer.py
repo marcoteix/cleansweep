@@ -34,7 +34,7 @@ class NucmerAlignment:
         queries: List[File],
         output: File,
         tmp_dir: Union[None, Directory] = None,
-        keep_tmp: bool = False
+        keep_tmp: bool = True
     ):
         
         if tmp_dir is None: 
@@ -80,11 +80,14 @@ class NucmerAlignment:
 
             delta_file = str(tmp_dir.joinpath(f"nucmer.{n}.delta"))
             coords_file = str(tmp_dir.joinpath(f"nucmer.{n}.coords"))
+            snp_file = str(tmp_dir.joinpath(f"nucmer.{n}.snps.tsv"))
 
             # Align with nucmer
             self.nucmer(reference, q, delta_file)
             # Convert .delta file to .coords
             self.get_coords(delta_file, coords_file)
+            # Get SNPs
+            self.get_snps(delta_file, snp_file)
 
             # Extract query ID and add to the map to coords files
             for record in SeqIO.parse(q, "fasta"):
@@ -222,3 +225,36 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
             )
         
         return "".join(masked_s)
+    
+    def get_snps(
+        self,
+        delta: File,
+        output: File
+    ):
+        
+        cmd = [
+            "show-snps",
+            "-T",
+            "-r",
+            str(delta)
+        ]
+
+        rc = subprocess.run(
+            cmd,
+            capture_output = True,
+            text = True
+        )
+
+        if rc.returncode:
+            raise RuntimeError(
+                f"Command \"{' '.join(cmd)}\" failed with return code {rc.returncode}:\n{rc.stderr}"
+            )
+        
+        # Write SNP file
+        with open(
+            output,
+            mode = "w"
+        ) as file:
+            file.write(
+                rc.stdout
+            )

@@ -1,7 +1,6 @@
 #%%
 from dataclasses import dataclass
 from typing import Union, Iterable
-
 import numpy as np
 from cleansweep.coverage import CoverageFilter, CoverageEstimator
 from cleansweep.io import FilePath
@@ -80,6 +79,88 @@ class VCFFilter:
     def fit(
         self, 
         vcf: pd.DataFrame, 
+        downsampled_vcf: File,
+        nucmer_snps: Iterable[File],
+        *,
+        min_depth: int = 0,
+        min_alt_bc: int = 0,
+        min_ref_bc: int = 0,
+        downsampling: Union[int, float] = 1.0,
+        chains: int = 5,
+        draws: int = 10000,
+        burn_in: int = 1000,
+        power: float = 0.975,
+        threads: int = 5,
+        engine: str = "pymc"
+    ) -> pd.Series:   
+    
+        # Step 1: estimate the coverage of the background strain
+
+        self.coverage_estimator = CoverageEstimator(
+            random_state = self.random_state
+        )
+
+        self.query_coverage = self.coverage_estimator \
+            .fit(
+                vcf = downsampled_vcf,
+                min_depth = min_depth
+            )
+
+        # Step 2: exclude low coverage variants and variants with an alternate allele 
+        # base count < min_alt_bc. Pass variants with a reference allele base count < 
+        # min_ref_bc and ignore them on the following steps
+
+        vcf = vcf.assign(
+            low_cov = vcf.depth.lt(min_depth),
+            low_alt_bc = vcf.alt_bc.lt(min_alt_bc),
+            low_ref_bc = vcf.ref_bc.lt(min_ref_bc)
+        )
+
+        # Step 3: exclude SNPs between the reference sequences (from nucmer alignments)
+
+        self.nucmer_filter = NucmerSNPFilter()
+        vcf = self.nucmer_filter.filter(
+            vcf = vcf,
+            nucmer_snps = nucmer_snps
+        )
+
+        # Step 4: filter SNPs based on allele depths
+        
+        self.basecount_filter = BaseCountFilter(
+            chains=chains, 
+            draws=draws, 
+            burn_in=burn_in,
+            power=power, 
+            threads=threads, 
+            engine=engine
+        )
+        
+        # Fit and get the probabilities of the query having the alternate allele
+        mcmc_vcf = vcf[
+            ~vcf.low_ref_bc & \
+            ~vcf.low_cov & \
+            vcf.snp_filter.eq("PASS") 
+        ]
+
+        p_alt = self.basecount_filter.fit(
+            vcf = mcmc_vcf, 
+            downsampling = downsampling,
+            query_coverage_estimate = self.query_coverage,
+        )
+
+        # Join the probabilities with the full VCF DataFrame
+        vcf = vcf.join(
+            p_alt.rename("p_alt")
+        )
+        return self.__add_filter_tag(
+            vcf = vcf,
+            bias = 0.5
+        )
+
+
+    def fit2(
+        self, 
+        vcf: pd.DataFrame, 
         coverages: pd.Series,
         query_name: str, 
         downsampled_vcf: File,
@@ -129,7 +210,7 @@ class VCFFilter:
             p_threshold = coverage_min_p, 
             **coverage_filter_params
         )
-        filtered_vcf = self.coverage_filter.filter(vcf)
+        filtered_vcf = vcf #self.coverage_filter.filter(vcf)
 
         # Check if MCMC is needed
         skip_mcmc = self.__lt_min_ambiguity(
@@ -169,12 +250,12 @@ class VCFFilter:
                 threads=threads, 
                 engine=engine
             )
-
+            
             # Fit and get the probabilities of the query having the alternate allele
             mcmc_vcf = filtered_vcf[
                 ~filtered_vcf.low_ref_bc & \
-                filtered_vcf.snp_filter.eq("PASS") & \
-                filtered_vcf.coverage_filter.eq("PASS")
+                filtered_vcf.snp_filter.eq("PASS") 
+                #filtered_vcf.coverage_filter.eq("PASS")
             ]
 
             p_alt = self.basecount_filter.fit(
@@ -211,7 +292,11 @@ class VCFFilter:
             compress=5
         )
 
-    def __add_filter_tag(self, vcf: pd.DataFrame, bias: float) -> pd.DataFrame:
+    def __add_filter_tag(
+        self, 
+        vcf: pd.DataFrame, 
+        bias: float
+    ) -> pd.DataFrame:
 
         vcf = vcf.assign(
             cleansweep_filter = vcf.p_alt \
@@ -225,15 +310,14 @@ class VCFFilter:
             )
         vcf.loc[
             vcf.low_alt_bc | \
-                vcf.snp_filter.eq("FAIL"), 
+                vcf.snp_filter.eq("FAIL") | \
+                vcf.low_cov, 
             "cleansweep_filter"
         ] = "FAIL"
-        vcf.loc[vcf.low_ref_bc, "cleansweep_filter"] = "PASS"
         vcf.loc[
-            vcf.coverage_filter.eq("FAIL"), 
+            vcf.low_ref_bc, 
             "cleansweep_filter"
-        ] = "HighCov" 
-
+        ] = "PASS"
 
         return vcf
 
