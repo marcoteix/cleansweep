@@ -1,5 +1,5 @@
 from setuptools import setup, find_packages
-from matiss.__init__ import __version__
+from cleansweep.__version__ import __version__
 
 setup(
     name='cleansweep',
@@ -8,16 +8,14 @@ setup(
     author='Marco Teixeira',
     author_email='mcarvalh@broadinstitute.org',
     license='MIT License',
-    packages=find_packages(where='cleansweep'),
+    packages=find_packages(
+        where='cleansweep'
+    ),
     package_dir={'': 'cleansweep'},
+    include_package_data=True,
     install_requires=[],
     classifiers=[
-        'Development Status :: 3 - Alpha',
-        'Intended Audience :: Science/Research',
         'MIT License',  
-        'Programming Language :: Python :: 3.8',
-    ],
-    scripts = [
-        "cleansweep/downsample_vcf.sh"
+        'Programming Language :: Python :: 3.12',
     ]
 )

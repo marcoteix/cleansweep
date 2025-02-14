@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 from typing import Iterable, Union
 from cleansweep.cli.commands import Subcommand
-from cleansweep.vcf import VCF
+from cleansweep.vcf import write_vcf
 from cleansweep.filter import VCFFilter
 from cleansweep.io import InputLoader, FilePath
 
@@ -27,12 +27,15 @@ coverage for the query strain.")
 allele base count for a variant to pass the CleanSweep filters. The default is 10.")
         parser.add_argument("--min_ref_bc", "-r", type=int, default=10, help="Variants with fewer than \
 this number of reference allele base counts pass the CleanSweep filters automatically.")
-        parser.add_argument("--min_ambiguity", "-am", type=float, default=0.0, help="If less than this \
-proportion of variants are considered ambiguous by Pilon, skips the base count filter and uses the Pilon \
-filters. Defaults to 0 (always apply the base count filter).")
         parser.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
 Pilon output VCF file used to fit the CleanSweep filters. If a float, uses that proportion of lines. Defaults \
-to 500.")        
+to 500.") 
+        parser.add_argument("--max-overdispersion", "-v", type=float, default=0.55, help="Maximum \
+overdispersion for the depth of coverage of the query strain. This value is only used to detect variants \
+with low alternate allele base counts not reported by the variant caller. Increasing this overdispersion \
+will lead to more variants being called, with lower alternate allele base counts. This increases recall \
+but may lead to a decrease in precision. The actual overdispersion estimated by CleanSweep may be greater \
+than this value.")         
         parser.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
         parser.add_argument("--n_chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
 Defaults to 5.")
@@ -47,8 +50,8 @@ value between 0 and 1. Defaults to 0.5.")
 MCMC. Defaults to 1.")
         parser.add_argument("--engine", "-e", type=str, default="pymc", choices=["pymc", "numpyro", "nutpie"], 
 help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
-        parser.add_argument("--downsampled-vcf", "-v", type=str, help="Downsampled VCF file with a subset of \
-the full Pilon output VCF, containing sites in the query.", required=True)
+        parser.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
+query depth of coverage. Defaults to %(default)s.", default=100000)
         parser.add_argument("--nucmer_snps", "-snp", type=str, nargs="+", help="List of SNPs detected by \
 nucmer between the reference sequence for the query strain and each of the background reference sequences. \
 Can be generated with the show-snps subcommand of nucmer.", required=True)
@@ -57,12 +60,12 @@ Can be generated with the show-snps subcommand of nucmer.", required=True)
         self,
         input: FilePath,
         query: str,
-        downsampled_vcf: FilePath,
         nucmer_snps: Iterable[FilePath],
+        n_coverage_sites: int,
         min_depth: int,
         min_alt_bc: int,
         min_ref_bc: int,
-        min_ambiguity: float,
+        max_overdispersion: float,
         downsample: Union[int, float],
         seed: int,
         n_chains: int,
@@ -77,22 +80,26 @@ Can be generated with the show-snps subcommand of nucmer.", required=True)
         outdir = Path(output)
         outdir.mkdir(parents=False, exist_ok=True)
 
-        # Read input files
-        input_loader = InputLoader().load(
-            vcf=input, 
-            query=query
+        # Set a temporary directory
+        tmp_dir = Path(output) \
+            .joinpath("tmp")
+        tmp_dir.mkdir(
+            exist_ok = True,
+            parents = True
         )
 
         # Filter
         vcf_filter = VCFFilter(random_state = seed)
         vcf_out = vcf_filter.fit(
-            vcf = input_loader.vcf, 
-            downsampled_vcf = downsampled_vcf,
+            vcf = input, 
+            query = query,
             nucmer_snps = nucmer_snps,
+            tmp_dir = tmp_dir,
+            n_coverage_sites = n_coverage_sites,
             min_depth = min_depth,
             min_alt_bc = min_alt_bc,
             min_ref_bc = min_ref_bc,
-            min_ambiguity = min_ambiguity,
+            max_overdispersion = max_overdispersion,
             downsampling = downsample,
             chains = n_chains,
             draws = n_draws,

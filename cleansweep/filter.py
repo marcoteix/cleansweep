@@ -5,9 +5,12 @@ import numpy as np
 from cleansweep.coverage import CoverageFilter, CoverageEstimator
 from cleansweep.io import FilePath
 from cleansweep.mcmc import BaseCountFilter
-from cleansweep.typing import File
+from cleansweep.typing import File, Directory
+from cleansweep.augment import AugmentVariantCalls
+from pathlib import Path
 import pandas as pd
 import joblib
+import shutil
 from copy import deepcopy
 
 NUCMER_SNPS_HEADER = [
@@ -78,13 +81,16 @@ class VCFFilter:
 
     def fit(
         self, 
-        vcf: pd.DataFrame, 
-        downsampled_vcf: File,
+        query: str,
+        vcf: File, 
         nucmer_snps: Iterable[File],
+        tmp_dir: Directory,
         *,
+        n_coverage_sites: int = 100000,
         min_depth: int = 0,
         min_alt_bc: int = 0,
         min_ref_bc: int = 0,
+        max_overdispersion: float = 0.55,
         downsampling: Union[int, float] = 1.0,
         chains: int = 5,
         draws: int = 10000,
@@ -102,11 +108,44 @@ class VCFFilter:
 
         self.query_coverage = self.coverage_estimator \
             .fit(
-                vcf = downsampled_vcf,
+                vcf = vcf,
+                n_lines = n_coverage_sites,
                 min_depth = min_depth
             )
+        
+        # Step 2: include sites with a non-reference base count > alpha regardless
+        # of if these were called as variants according to Pilon
 
-        # Step 2: exclude low coverage variants and variants with an alternate allele 
+        augment = AugmentVariantCalls()
+        augment_min_alt_bc = augment.estimate_min_alt_bc(
+            self.query_coverage,
+            alpha = 0.01,
+            overdispersion = max_overdispersion
+        )
+
+        # Path to the augmented VCF
+        Path(tmp_dir).mkdir(
+            exist_ok = True,
+            parents = True
+        )
+
+        augmented_vcf = Path(tmp_dir) \
+            .joinpath(
+                "cleansweep.augmented.vcf"
+            )
+        vcf = augment.augment(
+            vcf = vcf,
+            query = query,
+            min_alt_bc = augment_min_alt_bc,
+            output = augmented_vcf
+        )
+
+        # Delete tmp directory
+        shutil.rmtree(
+            tmp_dir
+        )
+
+        # Step 3: exclude low coverage variants and variants with an alternate allele 
         # base count < min_alt_bc. Pass variants with a reference allele base count < 
         # min_ref_bc and ignore them on the following steps
 
@@ -116,7 +155,7 @@ class VCFFilter:
             low_ref_bc = vcf.ref_bc.lt(min_ref_bc)
         )
 
-        # Step 3: exclude SNPs between the reference sequences (from nucmer alignments)
+        # Step 4: exclude SNPs between the reference sequences (from nucmer alignments)
 
         self.nucmer_filter = NucmerSNPFilter()
         vcf = self.nucmer_filter.filter(
@@ -124,7 +163,7 @@ class VCFFilter:
             nucmer_snps = nucmer_snps
         )
 
-        # Step 4: filter SNPs based on allele depths
+        # Step 5: filter SNPs based on allele depths
         
         self.basecount_filter = BaseCountFilter(
             chains=chains, 
@@ -309,15 +348,21 @@ class VCFFilter:
                 )
             )
         vcf.loc[
-            vcf.low_alt_bc | \
-                vcf.snp_filter.eq("FAIL") | \
-                vcf.low_cov, 
+            vcf.low_alt_bc,
             "cleansweep_filter"
-        ] = "FAIL"
+        ] = "LowAltBC"
+        vcf.loc[
+            vcf.snp_filter.eq("FAIL"),
+            "cleansweep_filter"
+        ] = "RefVar"
         vcf.loc[
             vcf.low_ref_bc, 
             "cleansweep_filter"
         ] = "PASS"
+        vcf.loc[
+            vcf.low_cov,
+            "cleansweep_filter"
+        ] = "LowCov"
 
         return vcf
 

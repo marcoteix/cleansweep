@@ -1,3 +1,4 @@
+from datetime import date
 from functools import partial
 import pandas as pd
 import subprocess
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 from io import StringIO
+from cleansweep.typing import File
 
 _VCF_HEADER = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "info", "format", "sample"]
 
@@ -171,3 +173,101 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
     
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None
+
+def write_vcf(
+    vcf: pd.DataFrame,
+    file: File,
+    chrom: str,
+    ref: File,
+    version: str
+):
+    
+    header = f"""##fileformat=VCFv4.2
+##fileDate={date.today().strftime("%Y%m%d")}
+##source="CleanSweep version {version}"
+##reference=file:{ref}
+##contig=<ID={chrom}>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=LowAltBC,Description="Low alternate allele depth">
+##FILTER=<ID=RefVar,Description="Variant explained by variation between references for the background and query strains">
+##FILTER=<ID=LowCov,Description="Low depth of coverage">
+##FILTER=<ID=FAIL,Description="Variant not present in the query strain">
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Valid read depth; some reads may have been filtered">
+##INFO=<ID=TD,Number=1,Type=Integer,Description="Total read depth including bad pairs">
+##INFO=<ID=PC,Number=1,Type=Integer,Description="Physical coverage of valid inserts across locus">
+##INFO=<ID=BQ,Number=1,Type=Integer,Description="Mean base quality at locus">
+##INFO=<ID=MQ,Number=1,Type=Integer,Description="Mean read mapping quality at locus">
+##INFO=<ID=QD,Number=1,Type=Integer,Description="Variant confidence/quality by depth">
+##INFO=<ID=BC,Number=4,Type=Integer,Description="Count of As, Cs, Gs, Ts at locus">
+##INFO=<ID=QP,Number=4,Type=Integer,Description="Percentage of As, Cs, Gs, Ts weighted by Q & MQ at locus">
+##INFO=<ID=IC,Number=1,Type=Integer,Description="Number of reads with insertion here">
+##INFO=<ID=DC,Number=1,Type=Integer,Description="Number of reads with deletion here">
+##INFO=<ID=XC,Number=1,Type=Integer,Description="Number of reads clipped here">
+##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes, for each ALT allele, in the same order as listed">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Fraction of evidence in support of alternate allele(s)">
+##INFO=<ID=IMPRECISE,Number=0,Type=Flag,Description="Imprecise change from local reassembly (ALT contains Ns)">
+##INFO=<ID=PILON,Number=1,Type=String,Description="Original Pilon FILTER flag">
+##INFO=<ID=CSP,Number=1,Type=Integer,Description="CleanSweep probability of a variant being present in the query strain, -100*log10 transformed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=.,Type=String,Description="Allelic depths for the ref and alt alleles in the order listed">
+##FORMAT=<ID=DP,Number=1,Type=String,Description="Approximate read depth; some reads may have been filtered">
+##ALT=<ID=DUP,Description="Possible segmental duplication">
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE"""
+    
+    # Subset the columns in the VCF spec and add fields to INFO 
+    fmt_vcf = vcf[
+        _VCF_HEADER
+    ].rename(
+        columns = {
+            k: k.upper()
+            for k in _VCF_HEADER
+        }
+    ).drop(
+        columns = "FILTER"
+    ).assign(
+        FILTER = vcf.cleansweep_filter if "cleansweep_filter" in vcf else ".",
+        INFO = vcf.apply(
+            lambda x: ";".join(
+                [
+                    x["info"],
+                    "PILON=" + x["filter"],
+                    "CSP=" + str(
+                        np.minimum(
+                            int(
+                                -100*np.log10(
+                                    x["p_alt"] + 1e-100 
+                                    if (
+                                        "p_alt" in x and \
+                                        not pd.isna(x["p_alt"]) 
+                                    )
+                                    else 1e-100
+                                )
+                            ),
+                            100000
+                        )
+                    )
+                ]
+            ),
+            axis = 1
+        )
+    )
+
+    # Convert DataFrame to TSV
+    vcf_str = "\n".join(
+        [
+            "\t".join(x.astype(str)) 
+            for x in fmt_vcf.values
+        ]
+    )
+
+    # Write VCF
+    with open(file, "w") as out:
+
+        out.write(
+            "\n".join(
+                [
+                    header,
+                    vcf_str
+                ]
+            )
+        )
