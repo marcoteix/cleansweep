@@ -1,0 +1,6 @@
+#!/bin/bash
+
+cleansweep filter \
+    test/data/test.vcf.gz \
+    "NZ_CP135691.1" \
+    test/data/references/background.*.fa \

@@ -1,0 +1,41 @@
+##fileformat=VCFv4.2
+##fileDate=20250214
+##source="CleanSweep version 0.1"
+##reference=file:test.fa
+##contig=<ID=NZ_CP135691.1>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=LowAltBC,Description="Low alternate allele depth">
+##FILTER=<ID=RefVar,Description="Variant explained by variation between references for the background and query strains">
+##FILTER=<ID=LowCov,Description="Low depth of coverage">
+##FILTER=<ID=FAIL,Description="Variant not present in the query strain">
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Valid read depth; some reads may have been filtered">
+##INFO=<ID=TD,Number=1,Type=Integer,Description="Total read depth including bad pairs">
+##INFO=<ID=PC,Number=1,Type=Integer,Description="Physical coverage of valid inserts across locus">
+##INFO=<ID=BQ,Number=1,Type=Integer,Description="Mean base quality at locus">
+##INFO=<ID=MQ,Number=1,Type=Integer,Description="Mean read mapping quality at locus">
+##INFO=<ID=QD,Number=1,Type=Integer,Description="Variant confidence/quality by depth">
+##INFO=<ID=BC,Number=4,Type=Integer,Description="Count of As, Cs, Gs, Ts at locus">
+##INFO=<ID=QP,Number=4,Type=Integer,Description="Percentage of As, Cs, Gs, Ts weighted by Q & MQ at locus">
+##INFO=<ID=IC,Number=1,Type=Integer,Description="Number of reads with insertion here">
+##INFO=<ID=DC,Number=1,Type=Integer,Description="Number of reads with deletion here">
+##INFO=<ID=XC,Number=1,Type=Integer,Description="Number of reads clipped here">
+##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes, for each ALT allele, in the same order as listed">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Fraction of evidence in support of alternate allele(s)">
+##INFO=<ID=IMPRECISE,Number=0,Type=Flag,Description="Imprecise change from local reassembly (ALT contains Ns)">
+##INFO=<ID=PILON,Number=1,Type=String,Description="Original Pilon FILTER flag">
+##INFO=<ID=CSP,Number=1,Type=Integer,Description="CleanSweep probability of a variant being present in the query strain, -100*log10 transformed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=.,Type=String,Description="Allelic depths for the ref and alt alleles in the order listed">
+##FORMAT=<ID=DP,Number=1,Type=String,Description="Approximate read depth; some reads may have been filtered">
+##ALT=<ID=DUP,Description="Possible segmental duplication">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+NZ_CP135691.1	1	.	A	C	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=0;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	2	.	T	A	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=1;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	3	.	G	A	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=1;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	4	.	A	C	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=2;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	5	.	T	A	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=2;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	6	.	A	C	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=3;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	7	.	C	A	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=3;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	8	.	C	A	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=4;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	9	.	T	A	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=6;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
+NZ_CP135691.1	10	.	G	A	0	DP=0;TD=0;BQ=0;MQ=0;QD=0;BC=0,0,0,0;QP=0,0,0,0;PC=6;IC=0;DC=0;XC=0;AC=0;AF=0;PILON=LowCov;CSP=10000	GT	0/0	.
