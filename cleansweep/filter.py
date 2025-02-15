@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 import joblib
 import shutil
+import logging
 from copy import deepcopy
 
 NUCMER_SNPS_HEADER = [
@@ -102,6 +103,8 @@ class VCFFilter:
     
         # Step 1: estimate the coverage of the background strain
 
+        logging.info(f"Estimating the mean depth of coverage for {query}...")
+
         self.coverage_estimator = CoverageEstimator(
             random_state = self.random_state
         )
@@ -148,6 +151,10 @@ class VCFFilter:
         # Step 3: exclude low coverage variants and variants with an alternate allele 
         # base count < min_alt_bc. Pass variants with a reference allele base count < 
         # min_ref_bc and ignore them on the following steps
+
+        logging.debug(
+            "Finding low coverage variants and those with low alt and ref base counts"
+        )
 
         vcf = vcf.assign(
             low_cov = vcf.depth.lt(min_depth),

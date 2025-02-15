@@ -4,6 +4,7 @@ from cleansweep.typing import File
 from cleansweep.vcf import VCF
 from scipy.stats import nbinom
 import pandas as pd
+import logging
 
 @dataclass
 class AugmentVariantCalls:
@@ -24,29 +25,49 @@ class AugmentVariantCalls:
         cmd = [
             "bcftools",
             "view",
-            str(vcf),
             "-i",
             filter_expression,
+            "-r",
             str(query),
-            "-o",
-            str(output),
-            "-O",
-            "z"
+            str(vcf)
         ]
 
-        rc = subprocess.run(cmd)
+        logging.info(
+            f"Augmenting variant calls (alt base count > {min_alt_bc}) with the command \"{' '.join(cmd)}\"..."
+        )
+
+        with open(output, "w") as file:
+            rc = subprocess.run(
+                cmd,
+                stdout = file 
+            )
+
+        logging.debug(
+            f"Got return code {rc.returncode} (stdout: {rc.stdout})."
+        )
 
         if rc.returncode:
             raise RuntimeError(
                 f"Failed to augment the variant calls for file {str(vcf)} with the \
-command \"{' '.join(cmd)}\". Got the following error: {rc.stderr}."
+command \"{' '.join(cmd)}\". Got the following error: {rc.stdout}."
+            )
+
+        # Read augmented VCF
+        try:
+            vcf_df = VCF(output).read(
+                chrom = query, 
+                exclude = ["\'INFO/AC = 0 & REF!=\".\"\'"],
+            )
+            logging.debug(
+                f"The augmented VCF has {len(vcf_df)} variants."
+            )
+        except pd.errors.EmptyDataError:
+            raise RuntimeError(
+                f"The augmented VCF file in {str(output)} is empty or has no SNVs."
             )
         
-        # Read augmented VCF
-        return VCF(output).read(
-            chrom = query, 
-            exclude = "\'INFO/AC = 0 & REF!=\".\"",
-        )
+        return vcf_df
+
 
     def estimate_min_alt_bc(
         self,

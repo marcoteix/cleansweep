@@ -123,7 +123,7 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
                 .apply(partial(get_info_value, tag="MQ", dtype=int)))
             
         if not hasattr(vcf, "depth"):
-            vcf = vcf.assign(mapq = vcf["info"] \
+            vcf = vcf.assign(depth = vcf["info"] \
                 .apply(partial(get_info_value, tag="DP", dtype=int)))
                         
         # If a variant is missing alternate allele information, extract is from the base counts
@@ -250,7 +250,12 @@ def write_vcf(
             ),
             axis = 1
         )
-    )
+    )[ 
+        [
+            x.upper()
+            for x in _VCF_HEADER
+        ]
+    ]
 
     # Convert DataFrame to TSV
     vcf_str = "\n".join(

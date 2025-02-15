@@ -11,7 +11,7 @@ classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
 
 [project.scripts]
-cleansweep = "cleansweep:main"
+cleansweep = "cleansweep.main:main"
 
 [project.urls]
 Home = "https://github.com/marcoteix/cleansweep"

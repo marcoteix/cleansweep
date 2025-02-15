@@ -1,6 +1,10 @@
 # Development tests
 tests/
 
+# Test data
+test/data/
+test/outputs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

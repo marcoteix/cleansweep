@@ -4,7 +4,9 @@ from typing import Iterable, Union
 from cleansweep.cli.commands import Subcommand
 from cleansweep.vcf import write_vcf
 from cleansweep.filter import VCFFilter
-from cleansweep.io import InputLoader, FilePath
+from cleansweep.io import FilePath
+from cleansweep.__version__ import __version__
+import logging
 
 class FilterCmd(Subcommand):
     """Filters variants in a query strain, called with plate swipe data.
@@ -43,9 +45,6 @@ Defaults to 5.")
 iterations. Defaults to 10000.")
         parser.add_argument("--n_burnin", "-nb", type=int, default=1000, help="Number of burn-in MCMC \
 sampling iterations. Defaults to 1000.")
-        parser.add_argument("--bias", "-b", type=float, default=0.5, help="Minimum posterior probability \
-of a variant being true needed for a variant to pass the CleanSweep filters. Controls the FDR. Must be a \
-value between 0 and 1. Defaults to 0.5.")
         parser.add_argument("--threads", "-t", type=int, default=1, help="Number of threads used in \
 MCMC. Defaults to 1.")
         parser.add_argument("--engine", "-e", type=str, default="pymc", choices=["pymc", "numpyro", "nutpie"], 
@@ -55,7 +54,9 @@ query depth of coverage. Defaults to %(default)s.", default=100000)
         parser.add_argument("--nucmer_snps", "-snp", type=str, nargs="+", help="List of SNPs detected by \
 nucmer between the reference sequence for the query strain and each of the background reference sequences. \
 Can be generated with the show-snps subcommand of nucmer.", required=True)
-          
+        parser.add_argument("--verbosity", "-V", type=int, choices = [0, 1, 2, 3, 4], help = "Logging verbosity. \
+Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
+        
     def run(
         self,
         input: FilePath,
@@ -71,24 +72,36 @@ Can be generated with the show-snps subcommand of nucmer.", required=True)
         n_chains: int,
         n_draws: int,
         n_burnin: int,
-        bias: float,
         threads: int,
         engine: str,
+        verbosity: int,
         output: FilePath
     ):
         
         outdir = Path(output)
         outdir.mkdir(parents=False, exist_ok=True)
 
+        # Set up logging
+        logging.basicConfig(
+            filename = outdir.joinpath("cleansweep.filter.log"),
+            filemode = "w",
+            encoding = "utf-8",
+            level = (4-verbosity) * 10
+        )
+
         # Set a temporary directory
         tmp_dir = Path(output) \
             .joinpath("tmp")
+        logging.debug(f"Creating a temporary directory in {str(tmp_dir)}...")
         tmp_dir.mkdir(
             exist_ok = True,
             parents = True
         )
 
         # Filter
+
+        logging.info(f"Filtering {str(input)}, strain {query}...")
+
         vcf_filter = VCFFilter(random_state = seed)
         vcf_out = vcf_filter.fit(
             vcf = input, 
@@ -104,15 +117,25 @@ Can be generated with the show-snps subcommand of nucmer.", required=True)
             chains = n_chains,
             draws = n_draws,
             burn_in = n_burnin,
-            bias = bias,
             threads = threads,
             engine = engine
         )
 
-        # Save the output VCF DataFrame
-        vcf_out.to_csv(outdir.joinpath("cleansweep.variants.tsv"), sep="\t")
+        # Write the output VCF
+        logging.debug(
+            f"Writing filtered VCF to {str(vcf_out)}..."
+        )
+        write_vcf(
+            vcf = vcf_out,
+            file = outdir.joinpath("cleansweep.variants.vcf"),
+            chrom = query,
+            ref = "unknown",
+            version = __version__
+        )
+
         # Save the filter and MCMC results
-        vcf_filter.save(outdir.joinpath("cleansweep.filter.pkl"))
-        vcf_filter.save_samples(outdir.joinpath("cleansweep.posterior.pkl"))
+        vcf_filter.save(outdir.joinpath("cleansweep.filter.swp"))
+        vcf_filter.save_samples(outdir.joinpath("cleansweep.posterior.swp"))
         
+        logging.info("Done!")
         

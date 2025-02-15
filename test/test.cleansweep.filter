@@ -3,4 +3,17 @@
 cleansweep filter \
     test/data/test.vcf.gz \
     "NZ_CP135691.1" \
-    test/data/references/background.*.fa \
+    test/outputs/filter \
+    -dp 5 \
+    -a 10 \
+    -r 10 \
+    -d 200 \
+    -v 0.55 \
+    -s 23 \
+    -nc 1 \
+    -nd 1000 \
+    -nb 10 \
+    -t 1 \
+    -Nc 10000 \
+    -snp test/data/nucmer/*.snps.tsv \
+    -V 4

@@ -14,6 +14,7 @@ from numpy.typing import ArrayLike
 from dataclasses import dataclass
 import subprocess
 import io
+import logging
 
 class CoverageFilter:
 
@@ -126,7 +127,7 @@ class CoverageEstimator:
         min_depth: int = 0,
         **kwargs
     ) -> float:
-        
+
         # Read depths from a VCF file
         depths = self.read(
             vcf = vcf,
@@ -152,9 +153,18 @@ class CoverageEstimator:
     ) -> ArrayLike:
         
         # Load VCF and downsample
+
+        logging.debug(
+            f"Downsampling {str(vcf)} to {n_lines} lines..."
+        )
+                
         vcf_df = self.downsample_vcf(
             vcf = vcf,
             n_lines = n_lines
+        )
+
+        logging.debug(
+            f"The downsampled VCF has {len(vcf_df)} variants."
         )
         
         # Exctract depth of coverage at each position
@@ -165,6 +175,10 @@ class CoverageEstimator:
                 dtype = int
             )
         ).values
+
+        logging.debug(
+            f"Got {len(self.depths)} valid depths of coverage."
+        )
 
         return self.depths
     
@@ -187,7 +201,10 @@ class CoverageEstimator:
             ).reshape(-1, 1)
         )
 
-        # Fit 2-component GMM
+        # Fit 5-component GMM
+
+        logging.debug("Fitting 5-component DPMM...")
+
         self.gmm = BayesianGaussianMixture(
             n_components = 5,
             random_state = self.random_state,
@@ -199,6 +216,17 @@ class CoverageEstimator:
 
         # Set the lowest component mean as the estimated depth of coverage
         mean_coverage = np.min(self.gmm.means_)
+
+        # Re-scale means for logging
+        rescaled_means = self.scaler \
+            .inverse_transform(
+                self.gmm.means_
+            ).flatten() \
+            .astype(str)
+        
+        logging.debug(
+            f"Estimated component means: {', '.join(rescaled_means)}."
+        )
 
         # Set the background coverage as the mean of the component with the most
         # weight, excluding the component assigned to the "true" coverage
@@ -220,6 +248,8 @@ class CoverageEstimator:
         background_coverage = self.scaler \
             .inverse_transform([[background_coverage]])[0,0]
         
+        logging.debug(f"Estimated mean depth of coverage: {mean_coverage}.")
+        
         return mean_coverage, background_coverage
 
     def downsample_vcf(
@@ -231,6 +261,11 @@ class CoverageEstimator:
         # Pick n_lines at random from the VCF file
         view_cmd = ["bcftools", "view", "-H", str(vcf)]
         shuf_cmd = ["shuf", "-n", str(n_lines)]
+
+        logging.debug(
+            f"Downsampling {str(vcf)} with the command \"{' '.join(view_cmd)} | \
+{' '.join(shuf_cmd)}\"..."
+        )
 
         view = subprocess.Popen(
             view_cmd,
