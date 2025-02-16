@@ -75,7 +75,8 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         threads: int,
         engine: str,
         verbosity: int,
-        output: FilePath
+        output: FilePath,
+        **kwargs
     ):
         
         outdir = Path(output)
@@ -123,7 +124,7 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
 
         # Write the output VCF
         logging.debug(
-            f"Writing filtered VCF to {str(vcf_out)}..."
+            f"Writing filtered VCF to {str(outdir.joinpath("cleansweep.variants.vcf"))}..."
         )
         write_vcf(
             vcf = vcf_out,

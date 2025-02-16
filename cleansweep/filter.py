@@ -13,6 +13,7 @@ import joblib
 import shutil
 import logging
 from copy import deepcopy
+import logging
 
 NUCMER_SNPS_HEADER = [
     "pos",
@@ -39,6 +40,10 @@ class NucmerSNPFilter:
         files: Iterable[File]
     ) -> pd.DataFrame:
         
+        logging.debug(
+            f"Reading SNPs among reference sequences in {' '.join(files)}..."
+        )
+        
         return pd.concat(
             [
                 pd.read_table(
@@ -59,6 +64,10 @@ class NucmerSNPFilter:
         # Load SNPs
         blacklist = self.read_snps(
             nucmer_snps
+        )
+
+        logging.debug( 
+            f"Found {len(blacklist)} SNPs among reference sequences."
         )
 
         # Fail SNPs in the input VCF also present in the set of nucmer SNPs
@@ -162,12 +171,22 @@ class VCFFilter:
             low_ref_bc = vcf.ref_bc.lt(min_ref_bc)
         )
 
+        logging.info(
+            f"Found {vcf.low_cov.sum()} low coverage variants, {vcf.low_alt_bc.sum()} variants \
+with low alternate base counts, and {vcf.low_ref_bc.sum()} variants with low reference base counts."
+        )
+
         # Step 4: exclude SNPs between the reference sequences (from nucmer alignments)
 
         self.nucmer_filter = NucmerSNPFilter()
         vcf = self.nucmer_filter.filter(
             vcf = vcf,
             nucmer_snps = nucmer_snps
+        )
+
+        logging.info( 
+            f"Filtered out {vcf.snp_filter.eq("PASS").sum()} variants also found in the \
+reference sequences."
         )
 
         # Step 5: filter SNPs based on allele depths
@@ -203,134 +222,28 @@ class VCFFilter:
             bias = 0.5
         )
 
-
-    def fit2(
-        self, 
-        vcf: pd.DataFrame, 
-        coverages: pd.Series,
-        query_name: str, 
-        downsampled_vcf: File,
-        nucmer_snps: Iterable[File],
-        *,
-        coverage_min_p = 0.1,
-        min_alt_bc: int = 10,
-        min_ref_bc: int = 10,
-        min_ambiguity: float = 0.0,
-        downsampling: Union[int, float] = 1.0,
-        chains: int = 5,
-        draws: int = 10000,
-        burn_in: int = 1000,
-        bias: float = 0.5,
-        threads: int = 4,
-        engine: str = "pymc",
-        coverage_filter_params: dict = {}
-    ) -> pd.Series:
-
-        # Coverage of the query strain
-        self.query_coverage = self.__get_query_coverage(
-            coverages = coverages, 
-            query_name = query_name
-        )
-
-        # Automatically fail all variants with an alternate allele base count < min_alt_bc
-        # Exclude variants with a reference allele base count < min_ref_bc from the estimation
-        vcf = vcf.assign(
-            low_alt_bc = vcf.alt_bc.lt(min_alt_bc),
-            low_ref_bc = vcf.ref_bc.lt(min_ref_bc)
-        )
-
-        # Filter SNPs based on nucmer alignments
-        self.nucmer_filter = NucmerSNPFilter()
-        vcf = self.nucmer_filter.filter(
-            vcf,
-            nucmer_snps
-        )
-
-        # Fit and apply the coverage-based filter
-        self.coverage_filter = CoverageFilter(
-            random_state = self.random_state
-        )
-        vcf = self.coverage_filter.fit(
-            vcf, 
-            self.query_coverage, 
-            p_threshold = coverage_min_p, 
-            **coverage_filter_params
-        )
-        filtered_vcf = vcf #self.coverage_filter.filter(vcf)
-
-        # Check if MCMC is needed
-        skip_mcmc = self.__lt_min_ambiguity(
-            filtered_vcf, 
-            min_ambiguity = min_ambiguity
-        )
-
-        if skip_mcmc:
-
-            p_alt = filtered_vcf["filter"] \
-                .eq("PASS") \
-                .replace(
-                    {True: 1.0, False: 0.0}
-                )
-            
-        else:
-
-            # Estimate the query and background coverages 
-            self.coverage_estimator = CoverageEstimator(
-                random_state = self.random_state
-            )
-
-            depths = self.coverage_estimator \
-                .read(downsampled_vcf)
-            
-            # Exclude NaNs
-            depths = depths[~np.isnan(depths)]
-            
-            query_coverage, background_coverage = self.coverage_estimator \
-                .estimate(depths)
-
-            self.basecount_filter = BaseCountFilter(
-                chains=chains, 
-                draws=draws, 
-                burn_in=burn_in,
-                bias=bias, 
-                threads=threads, 
-                engine=engine
-            )
-            
-            # Fit and get the probabilities of the query having the alternate allele
-            mcmc_vcf = filtered_vcf[
-                ~filtered_vcf.low_ref_bc & \
-                filtered_vcf.snp_filter.eq("PASS") 
-                #filtered_vcf.coverage_filter.eq("PASS")
-            ]
-
-            p_alt = self.basecount_filter.fit(
-                vcf = mcmc_vcf, 
-                coverages = coverages.to_dict(), 
-                query = query_name, 
-                downsampling = downsampling,
-                query_coverage_estimate = query_coverage,
-                background_coverage_estimate = background_coverage
-            )
-
-        # Join the probabilities with the VCF DataFrame
-        vcf = vcf.join(
-            p_alt.rename("p_alt")
-        )
-        return self.__add_filter_tag(
-            vcf = vcf, 
-            bias = bias
-        )
-
     def save_samples(self, path: FilePath) -> None:
+        
         if hasattr(self, "basecount_filter"):
+            
+            logging.debug(
+                f"Saving MCMC sampling results to {str(path)}..."
+            )
+
             joblib.dump(
                 deepcopy(self.basecount_filter.sampling_results), 
                 path,
                 compress=5
             )
+        
+        else:
+            raise RuntimeError("VCFFilter has no MCMC sampling results.")
 
     def save(self, path: FilePath) -> None:
+
+        logging.debug(
+            f"Saving CleanSweep filter as {str(path)}..."
+        )
 
         joblib.dump(
             deepcopy(self),
@@ -372,29 +285,4 @@ class VCFFilter:
         ] = "LowCov"
 
         return vcf
-
-    def __get_query_coverage(
-        self, 
-        coverages: pd.Series, 
-        query_name: str
-    ) -> float:
-
-        if not query_name in coverages.index:
-            raise ValueError(f"No coverage information found for the query strain ({query_name}). \
-Got coverage information for the strains {', '.join(coverages.index.to_list())}.")
-        return coverages[query_name]
-    
-        
-    def __lt_min_ambiguity(
-        self, 
-        vcf: pd.DataFrame, 
-        min_ambiguity: float
-    ) -> bool:
-
-        pct_ambiguous =  vcf["filter"].ne("PASS").sum()/len(vcf)
-        if pct_ambiguous < min_ambiguity:
-            print(f"Fewer than {min_ambiguity*100:.0f}% of variants are ambiguous ({pct_ambiguous*100:.0f}%). \
-Skipping the base count filter and using the Pilon filters...")
-            return True
-        else: return False
 # %%

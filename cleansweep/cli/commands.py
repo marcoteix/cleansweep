@@ -14,8 +14,12 @@ class Subcommand(metaclass=ABCMeta):
     def run(self, *args, **kwargs):
         pass
 
-def add_subcommand(name: str, subcommand: Subcommand, 
-    subparsers: argparse._SubParsersAction, **kwargs):
+def add_subcommand(
+    name: str, 
+    subcommand: Subcommand, 
+    subparsers: argparse._SubParsersAction, 
+    **kwargs
+):
 
     if hasattr(subcommand.__class__, '__doc__'):
         subcommand_doc = subcommand.__class__.__doc__
@@ -24,4 +28,7 @@ def add_subcommand(name: str, subcommand: Subcommand,
         kwargs['help'] = first_help_line
         kwargs['description'] = textwrap.dedent(subcommand_doc)
 
-    return subparsers.add_parser(name, **kwargs)
+    parser = subparsers.add_parser(name, **kwargs)
+    parser.set_defaults(command=name)
+
+    return parser

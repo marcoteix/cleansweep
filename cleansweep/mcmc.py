@@ -5,6 +5,7 @@ import pymc as pm
 from dataclasses import dataclass
 import pandas as pd
 import pytensor.tensor as pt
+import logging
 
 @dataclass
 class BaseCountFilter:
@@ -31,6 +32,14 @@ class BaseCountFilter:
         query_coverage_estimate: float,
         downsampling: Union[int, float] = 1.0,
     ) -> pd.Series:
+        
+        logging.debug(
+            "Estimating the overdispersion for the depth of coverage of the query strain."
+        )
+
+        logging.info(
+            f"Downsampling the input VCF to {downsampling} entries..."
+        )
 
         # Downsample the VCF file
         vcf_fit = self.__downsample_vcf(
@@ -116,6 +125,11 @@ class BaseCountFilter:
             )
 
             # MCMC sampling
+            logging.info(
+                f"Starting MCMC sampling with {self.chains} chains, {self.draws} draws, {self.burn_in} \
+burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sampler: {self.engine}."
+            )
+
             self.sampling_results = pm.sample(
                 chains=self.chains, 
                 draws=self.draws, 
@@ -126,6 +140,10 @@ class BaseCountFilter:
             )
             
             # Predict for the full data 
+            logging.debug(
+                "Getting the MAP estimator for all data..."
+            )
+            logging.info
             alt_p = self.get_posterior(
                 vcf, 
                 self.sampling_results, 
@@ -143,11 +161,11 @@ class BaseCountFilter:
     ) -> pd.Series:
 
         # Build base count distributions for true and false variants based on the MCMC results
-        dist_params = self.__get_distribution_params(sampling_results)
+        self.dist_params = self.__get_distribution_params(sampling_results)
 
         dist_query = pm.NegativeBinomial.dist(
             n = query_coverage_estimate,
-            p = dist_params["query_overdispersion"]
+            p = self.dist_params["query_overdispersion"]
         )
         query_logp = np.maximum(
             pm.logp(
@@ -173,7 +191,7 @@ class BaseCountFilter:
             -1e6
         )
 
-        prior = dist_params["alt_prob"]
+        prior = self.dist_params["alt_prob"]
         if prior == "ref_bc":
             prior = 1 - prior
         
@@ -284,6 +302,11 @@ class BaseCountFilter:
             vcf,
             query_coverage_estimate = query_coverage_estimate,
             downsampling = downsampling
+        )
+
+        logging.info(
+            f"Estimated parameters for the distribution of depths of coverage for the query strain and \
+alleles in the query strain: {"; ".join([k+": "+str(v) for k,v in self.dist_params.items()])}."
         )
 
         return self.prob

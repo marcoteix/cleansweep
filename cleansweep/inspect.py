@@ -1,60 +1,105 @@
-#%%
-import matplotlib.pyplot as plt 
+from dataclasses import dataclass 
 from cleansweep.filter import VCFFilter
-import seaborn as sns
-from typing import Tuple, Union
-from itertools import permutations
+from cleansweep.typing import File
+import joblib
 import pandas as pd
-import numpy as np
 
-def plot_posterior(
-    vcf_filter: VCFFilter,
-    basecount_range: Tuple[int, int] = (0, 500),
-    basecount_step: int = 1,
-    figsize: Tuple[float, float] = (7,5)
-):
+@dataclass
+class Inspector:
+
+    def vcf_stats(
+        self,
+        vcf = pd.DataFrame
+    ) -> dict:
+        
+        stats = {}
+
+        # Number of variants
+        stats[
+            "Number of variants"
+        ] = len(vcf)
+
+        # Number of variants per CleanSweep filter
+        stats[
+            "Number of variants per CleanSweep filter"
+        ] = vcf["filter"] \
+            .value_counts() \
+            .to_dict()
+        
+        passing = vcf[ 
+            vcf["filter"].eq("PASS")
+        ]
+
+        stats[
+            "Statistics about passing sites"
+        ] = {
+            "Depth of coverage (pileups)": passing.depth.describe().to_dict(),
+            "Reference allele depth": passing.ref_bc.describe().to_dict(),
+            "Alternate allele depth": passing.alt_bc.describe().to_dict()
+        }
+
+        failing = vcf[ 
+            vcf["filter"].ne("PASS")
+        ]
+
+        stats[
+            "Statistics about excluded sites"
+        ] = {
+            "Depth of coverage (pileups)": failing.depth.describe().to_dict(),
+            "Reference allele depth": failing.ref_bc.describe().to_dict(),
+            "Alternate allele depth": failing.alt_bc.describe().to_dict()
+        }        
+
+        stats[ 
+            "Statistics about the estimated probability of each variant:"
+        ] = vcf.p_alt.describe().to_dict()
+
+        return stats
     
-    # Get a grid of alt and ref allele base counts
-    bc_grid = pd.DataFrame(
-        np.array(
-            list(
-                permutations(np.arange(*basecount_range, basecount_step), 2)
-            )
-        ),
-        columns = ["alt_bc", "ref_bc"]
-    )
+    def cleansweep_info(
+        self,
+        cleansweep: VCFFilter
+    ) -> dict:
+        
+        return {
+            "Random seed": cleansweep.random_state,
+            "Estimated mean query depth of coverage": cleansweep.query_coverage,
+            "Means of the DPMM components when estimating the mean depth of coverage": list(
+                cleansweep \
+                    .coverage_estimator.scaler.inverse_transform(
+                        cleansweep.coverage_estimator.gmm.means_
+                    ).flatten()
+            ),
+            "Mean depth of coverage GMM converged?": cleansweep.coverage_estimator.gmm.converged_,
+            "Estimated overdispersion for the query depths of coverage (query_overdispersion) \
+and probability of a variant being true (alt_prob)": cleansweep.basecount_filter.dist_params,
+            "MCMC options": {
+                "Number of chains": cleansweep.basecount_filter.chains,
+                "Number of draws per chain": cleansweep.basecount_filter.draws,
+                "Number of burn-in draws per chain": cleansweep.basecount_filter.burn_in,
+                "Engine": cleansweep.basecount_filter.engine,
+                "Number of threads": cleansweep.basecount_filter.threads
+            }
+        }
+    
+    def report(
+        self,
+        vcf: pd.DataFrame, 
+        cleansweep: File
+    ) -> dict:
 
-    # Compute the posterior
-    posteriors = vcf_filter.basecount_filter.get_posterior(
-        observed = bc_grid,
-        sampling_results = vcf_filter.basecount_filter.sampling_results,
-        ambiguity_factor = vcf_filter.basecount_filter.ambiguity_factor,
-        query_coverage = None
-    ).rename("posterior")
-
-    X = bc_grid.join(posteriors)
-
-    fig, ax = plt.subplots(
-        1, 1,
-        constrained_layout = True,
-        figsize = figsize
-    )
-    sns.scatterplot(
-        data=X, 
-        x="alt_bc", 
-        y="ref_bc", 
-        hue="posterior",
-        size = "posterior",
-        palette="inferno",
-        alpha = .3,
-        ax=ax
-    )
-    ax.set_xlabel("Alternate allele base count")
-    ax.set_ylabel("Reference allele base count")
-    ax.grid(False)
-    sns.despine(ax=ax)
-
-    plt.show()
+        cleansweep_filter = self.load_filter(cleansweep)
+        return {
+            "VCF statistics": self.vcf_stats(vcf),
+            "CleanSweep filter information": self.cleansweep_info(cleansweep_filter)
+        }
 
 
-# %%
+    def load_filter(
+        self,
+        file: File
+    ) -> VCFFilter:
+
+        return joblib.load(
+            file
+        )

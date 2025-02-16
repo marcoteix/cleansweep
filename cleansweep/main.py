@@ -1,34 +1,48 @@
 from cleansweep.cli.filter import FilterCmd
 from cleansweep.cli.prepare import PrepareCmd
+from cleansweep.cli.inspect import InspectCmd
+from cleansweep.cli.commands import add_subcommand
 import argparse
 from copy import deepcopy
 
 def main():
     parser = argparse.ArgumentParser("CleanSweep")
 
+    filter_cmd = FilterCmd()
+    prepare_cmd = PrepareCmd()
+    inspect_cmd = InspectCmd()
+
     subparsers = parser.add_subparsers()
 
-    filter_parser = subparsers.add_parser("filter", help="Filter a VCF file.")
-    filter_parser.set_defaults(command="filter")
-    prepare_parser = subparsers.add_parser("prepare", help="Prepare a reference for alignment.")
-    prepare_parser.set_defaults(command="prepare")
-
-    # Register args
-    filter_cmd = FilterCmd()
-    filter_cmd.add_arguments(filter_parser)
-    prepare_cmd = PrepareCmd()
-    prepare_cmd.add_arguments(prepare_parser)
+    for name, cmd in zip(
+        [
+            "filter",
+            "prepare",
+            "inspect"
+        ],
+        [
+            filter_cmd,
+            prepare_cmd,
+            inspect_cmd
+        ]
+    ):
+        cmd_parser = add_subcommand(
+            name = name,
+            subcommand = cmd,
+            subparsers = subparsers
+        )
+        cmd.add_arguments(cmd_parser)
 
     args = parser.parse_args()
 
     kwargs = deepcopy(vars(args))
-    if "command" in kwargs:
-        del kwargs["command"]
 
     if args.command == "filter":
         filter_cmd.run(**kwargs)
     elif args.command == "prepare":
         prepare_cmd.run(**kwargs)
+    elif args.command == "inspect":
+        inspect_cmd.run(**kwargs)
 
 if __name__ == "__main__":
     main()

@@ -24,7 +24,7 @@ class VCF:
 
     def read(
         self, 
-        chrom: str, 
+        chrom: Union[str, None], 
         filters: Union[Collection[str], None] = None, 
         include: Union[str, None]=None,
         exclude: Union[str, None]=None,
@@ -68,7 +68,8 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         self.vcf.columns = _VCF_HEADER[:self.vcf.shape[1]]
 
         # Keep variants in the query
-        self.vcf = self.vcf[self.vcf.chrom.eq(chrom)]
+        if chrom:
+            self.vcf = self.vcf[self.vcf.chrom.eq(chrom)]
 
         self.vcf = self.exclude_indels(self.vcf)
         if add_base_counts:
@@ -125,6 +126,13 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         if not hasattr(vcf, "depth"):
             vcf = vcf.assign(depth = vcf["info"] \
                 .apply(partial(get_info_value, tag="DP", dtype=int)))
+            
+        if not hasattr(vcf, "p_alt"):
+            vcf = vcf.assign(p_alt = vcf["info"] \
+                .apply(
+                    lambda x: 10**(-get_info_value(x, tag="CSP", dtype=int))
+                )
+            )
                         
         # If a variant is missing alternate allele information, extract is from the base counts
         vcf.loc[
@@ -170,7 +178,7 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
 
         # Find the maximum base count (alt allele)
         return bases[np.argmax(bc)]
-    
+        
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None
 
@@ -208,6 +216,8 @@ def write_vcf(
 ##INFO=<ID=IMPRECISE,Number=0,Type=Flag,Description="Imprecise change from local reassembly (ALT contains Ns)">
 ##INFO=<ID=PILON,Number=1,Type=String,Description="Original Pilon FILTER flag">
 ##INFO=<ID=CSP,Number=1,Type=Integer,Description="CleanSweep probability of a variant being present in the query strain, -100*log10 transformed">
+##INFO=<ID=RD,Number=1,Type=Integer,Description="Reference allele base count">
+##INFO=<ID=AD,Number=1,Type=Integer,Description="Main alternate allele base count">
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##FORMAT=<ID=AD,Number=.,Type=String,Description="Allelic depths for the ref and alt alleles in the order listed">
 ##FORMAT=<ID=DP,Number=1,Type=String,Description="Approximate read depth; some reads may have been filtered">
@@ -245,7 +255,17 @@ def write_vcf(
                             ),
                             100000
                         )
-                    )
+                    ),
+                    "RD=" + (
+                        str(x.ref_bc)
+                        if "ref_bc" in vcf 
+                        else "."
+                    ),
+                    "AD=" + (
+                        str(x.alt_bc)
+                        if "alt_bc" in vcf 
+                        else "."
+                    ),                    
                 ]
             ),
             axis = 1

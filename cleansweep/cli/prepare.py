@@ -36,7 +36,8 @@ Default is %(default)d.", default=150)
         tmp: Union[None, Directory],
         keep_tmp: bool,
         min_identity: float,
-        min_length: int
+        min_length: int,
+        **kwargs
     ):
         
         nucmer = NucmerAlignment(
