@@ -37,7 +37,14 @@ overdispersion for the depth of coverage of the query strain. This value is only
 with low alternate allele base counts not reported by the variant caller. Increasing this overdispersion \
 will lead to more variants being called, with lower alternate allele base counts. This increases recall \
 but may lead to a decrease in precision. The actual overdispersion estimated by CleanSweep may be greater \
-than this value.")         
+than this value.")     
+        parser.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
+query depth of coverage. Defaults to %(default)s.", default=100000)
+        parser.add_argument("--nucmer_snps", "-snp", type=str, nargs="+", help="List of SNPs detected by \
+nucmer between the reference sequence for the query strain and each of the background reference sequences. \
+Can be generated with the show-snps subcommand of nucmer.", required=True) 
+        parser.add_argument("--gaps", "-g", type=str, help="File with gap limits in the reference sequence, \
+created by CleanSweep prepare (cleansweep.gaps.tsv).", required=True)   
         parser.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
         parser.add_argument("--n_chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
 Defaults to 5.")
@@ -49,11 +56,6 @@ sampling iterations. Defaults to 1000.")
 MCMC. Defaults to 1.")
         parser.add_argument("--engine", "-e", type=str, default="pymc", choices=["pymc", "numpyro", "nutpie"], 
 help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
-        parser.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
-query depth of coverage. Defaults to %(default)s.", default=100000)
-        parser.add_argument("--nucmer_snps", "-snp", type=str, nargs="+", help="List of SNPs detected by \
-nucmer between the reference sequence for the query strain and each of the background reference sequences. \
-Can be generated with the show-snps subcommand of nucmer.", required=True)
         parser.add_argument("--verbosity", "-V", type=int, choices = [0, 1, 2, 3, 4], help = "Logging verbosity. \
 Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         
@@ -61,6 +63,7 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         self,
         input: FilePath,
         query: str,
+        gaps: FilePath,
         nucmer_snps: Iterable[FilePath],
         n_coverage_sites: int,
         min_depth: int,
@@ -106,6 +109,7 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         vcf_filter = VCFFilter(random_state = seed)
         vcf_out = vcf_filter.fit(
             vcf = input, 
+            gaps = gaps,
             query = query,
             nucmer_snps = nucmer_snps,
             tmp_dir = tmp_dir,

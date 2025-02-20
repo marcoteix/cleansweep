@@ -306,7 +306,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
 
         logging.info(
             f"Estimated parameters for the distribution of depths of coverage for the query strain and \
-alleles in the query strain: {"; ".join([k+": "+str(v) for k,v in self.dist_params.items()])}."
+alleles in the query strain: {'; '.join([k+': '+str(v) for k,v in self.dist_params.items()])}."
         )
 
         return self.prob

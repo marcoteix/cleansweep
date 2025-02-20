@@ -32,23 +32,34 @@ class NucmerAlignment:
         self,
         reference: File,
         queries: List[File],
-        output: File,
+        output: Directory,
         tmp_dir: Union[None, Directory] = None,
         keep_tmp: bool = True
     ):
         
+        outdir = Path(output)
+        outdir.mkdir(
+            exist_ok = True
+        )
+        
         if tmp_dir is None: 
-            tmp_dir = Path(output).parent.joinpath("tmp")
+            tmp_dir = outdir.joinpath("tmp")
 
         # Align queries to the reference with nucmer
         file_map = self.align(
             reference = reference,
             queries = queries,
+            outdir = outdir,
             tmp_dir = tmp_dir
         )
 
         # Write reference FASTA to output
-        with open(reference) as input_file, open(output, "w") as output_file:
+
+        output_fasta = outdir.joinpath(
+            "cleansweep.reference.fa"
+        )
+
+        with open(reference) as input_file, open(output_fasta, "w") as output_file:
             SeqIO.write(
                 SeqIO.parse(input_file, "fasta"),
                 output_file,
@@ -59,8 +70,28 @@ class NucmerAlignment:
         for record, files in file_map.items():
 
             coords = self.read_coords(files["coords"])
-            with open(output, "a") as output_file:
+            with open(output_fasta, "a") as output_file:
                 self.mask(coords, files["fasta"], record, output_file)
+
+        # Get a list of unaligned regions in the reference
+        self.gaps = self.get_gaps(
+            [x["coords"] for x in file_map.values()]
+        )
+
+        # Write to the output directory
+        pd.DataFrame(
+            self.gaps,
+            columns = [
+                "start",
+                "end"
+            ]
+        ).set_index("start") \
+        .to_csv(
+            outdir.joinpath(
+                "cleansweep.gaps.tsv"
+            ),
+            sep = "\t"
+        )
 
         if not keep_tmp:
             shutil.rmtree(tmp_dir)
@@ -69,18 +100,21 @@ class NucmerAlignment:
         self,
         reference: File,
         queries: List[File],
+        outdir: Directory,
         tmp_dir: Directory
     ) -> Dict[str, Dict[str, str]]:
         
+        outdir = Path(outdir)
+        outdir.mkdir(exist_ok=True)
         tmp_dir = Path(tmp_dir)
-        tmp_dir.mkdir(exist_ok=True, parents=True)
+        tmp_dir.mkdir(exist_ok=True)
 
         self.__coords = {}
         for n, q in enumerate(queries):
 
             delta_file = str(tmp_dir.joinpath(f"nucmer.{n}.delta"))
             coords_file = str(tmp_dir.joinpath(f"nucmer.{n}.coords"))
-            snp_file = str(tmp_dir.joinpath(f"nucmer.{n}.snps.tsv"))
+            snp_file = str(outdir.joinpath(f"nucmer.{n}.snps.tsv"))
 
             # Align with nucmer
             self.nucmer(reference, q, delta_file)
@@ -144,9 +178,13 @@ class NucmerAlignment:
 
         return self.coords
 
-    def get_mask_limits(self, coords: pd.DataFrame) -> List[Tuple[int, int]]:
+    def get_mask_limits(
+        self, 
+        coords: pd.DataFrame,
+        invert: bool = False
+    ) -> List[Tuple[int, int]]:
         """
-        Marks regions in the query which align to the reference.
+        Marks regions in the query which align to the reference, or vice-versa (if invert is `True`).
         """
         # Exclude regions with < min_identity
         pass_coords = coords[
@@ -154,6 +192,11 @@ class NucmerAlignment:
                 self.min_identity * 100
             )
         ]
+
+        if invert:
+            subject = "ref"
+        else:
+            subject = "query"
 
         # Exclude regions with < min_length
         pass_coords = pass_coords[
@@ -163,14 +206,20 @@ class NucmerAlignment:
 
         # Place alignments in the same orientation
         pass_coords = pass_coords.assign(
-            f_query_start = pass_coords[["query_start", "query_end"]].min(axis=1),
-            f_query_end = pass_coords[["query_start", "query_end"]].max(axis=1)
+            **{
+                f"f_{subject}_start": pass_coords[
+                        [f"{subject}_start", f"{subject}_end"]
+                    ].min(axis=1),
+                f"f_{subject}_end": pass_coords[
+                        [f"{subject}_start", f"{subject}_end"]
+                    ].max(axis=1)
+            }
         )
 
         # Sort alignment starts
-        starts = pass_coords.f_query_start.sort_values().values
+        starts = pass_coords[f"f_{subject}_start"].sort_values().values
         # Sort alignment ends
-        ends = pass_coords.f_query_end.sort_values().values
+        ends = pass_coords[f"f_{subject}_end"].sort_values().values
 
         # Iterate over start and ends. Track how many alignments are open
         # (open at a start; close after an end). Mask bp where this counter
@@ -192,7 +241,7 @@ class NucmerAlignment:
             if counter < 0:
                 raise RuntimeError(f"Something went wrong! Counter is {counter} (< 0). \
 start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}.")
-            
+
         return [(a, b) for a,b in zip([0]+mask_ends, mask_starts+[-1])]
             
     def mask(
@@ -258,3 +307,21 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
             file.write(
                 rc.stdout
             )
+
+    def get_gaps(
+        self,
+        coords: List[File]
+    ) -> List[Tuple[int, int]]:
+        
+        # Concatenate the coords files from all queries
+        coord = pd.concat(
+            [
+                self.read_coords(file)
+                for file in coords
+            ]
+        )
+
+        return self.get_mask_limits(
+            coords = coord,
+            invert = True
+        )

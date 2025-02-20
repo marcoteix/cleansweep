@@ -123,6 +123,8 @@ class CoverageEstimator:
     def fit(
         self,
         vcf: File,
+        query: str,
+        gaps: File,
         n_lines: int = 100000,
         min_depth: int = 0,
         **kwargs
@@ -131,6 +133,8 @@ class CoverageEstimator:
         # Read depths from a VCF file
         depths = self.read(
             vcf = vcf,
+            query = query,
+            gaps = gaps,
             n_lines = n_lines
         )
 
@@ -149,6 +153,8 @@ class CoverageEstimator:
     def read(
         self,
         vcf: File,
+        query: str,
+        gaps: File,
         n_lines: int = 100000
     ) -> ArrayLike:
         
@@ -160,6 +166,8 @@ class CoverageEstimator:
                 
         vcf_df = self.downsample_vcf(
             vcf = vcf,
+            query = query,
+            gaps = gaps,
             n_lines = n_lines
         )
 
@@ -171,7 +179,7 @@ class CoverageEstimator:
         self.depths = vcf_df[7].apply(
             partial(
                 get_info_value,
-                tag = "TD",
+                tag = "DP",
                 dtype = int
             )
         ).values
@@ -183,6 +191,14 @@ class CoverageEstimator:
         return self.depths
     
     def estimate(
+        self,
+        depths: ArrayLike,
+        **kwargs
+    ) -> Tuple[float, float]:
+        
+        return np.median(depths), None
+    
+    def __estimate_deprecated(
         self,
         depths: ArrayLike,
         **kwargs
@@ -255,11 +271,32 @@ class CoverageEstimator:
     def downsample_vcf(
         self,
         vcf: File,
-        n_lines: int = 100000
+        query: str,
+        gaps: File,
+        n_lines: int = 100000,
     ) -> pd.DataFrame:
         
+        # Read gaps file
+        gaps = pd.read_csv(
+            gaps,
+            sep = "\t"
+        )
+
+        if not len(gaps):
+            raise ValueError(
+                f"Found no gaps in {str(gaps)}. Cannot estimate the query depth of coverage."
+            )
+        
+        # Create a string for the bcftools view region option
+        region = ",".join(
+            [ 
+                query + ":" + str(x.start) + "-" + str(x.end)
+                for _, x in gaps.iterrows()
+            ]
+        )
+
         # Pick n_lines at random from the VCF file
-        view_cmd = ["bcftools", "view", "-H", str(vcf)]
+        view_cmd = ["bcftools", "view", "-H", str(vcf), "-r", region]
         shuf_cmd = ["shuf", "-n", str(n_lines)]
 
         logging.debug(

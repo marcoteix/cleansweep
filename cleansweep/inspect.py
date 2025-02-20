@@ -64,13 +64,6 @@ class Inspector:
         return {
             "Random seed": cleansweep.random_state,
             "Estimated mean query depth of coverage": cleansweep.query_coverage,
-            "Means of the DPMM components when estimating the mean depth of coverage": list(
-                cleansweep \
-                    .coverage_estimator.scaler.inverse_transform(
-                        cleansweep.coverage_estimator.gmm.means_
-                    ).flatten()
-            ),
-            "Mean depth of coverage GMM converged?": cleansweep.coverage_estimator.gmm.converged_,
             "Estimated overdispersion for the query depths of coverage (query_overdispersion) \
 and probability of a variant being true (alt_prob)": cleansweep.basecount_filter.dist_params,
             "MCMC options": {

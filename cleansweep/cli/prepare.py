@@ -17,7 +17,7 @@ class PrepareCmd(Subcommand):
         
         parser.add_argument("reference", type=str, help="Reference FASTA file (of the strain of interest).")
         parser.add_argument("query", type=str, nargs="+", help="Query FASTAs for the background strains.")
-        parser.add_argument("--output", "-o", type=str, required=True, help="Output concatenated FASTA file.")
+        parser.add_argument("--output", "-o", type=str, required=True, help="Output directory.")
         parser.add_argument("--tmp", "-t", type=str, required=False, help="Writes temporary files to this \
 directory. If not set, writes to the same directory as the output file.")
         parser.add_argument("--keep-tmp", "-k", action="store_true", help="If set, keeps temporary files.")

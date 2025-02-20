@@ -93,6 +93,7 @@ class VCFFilter:
         self, 
         query: str,
         vcf: File, 
+        gaps: File,
         nucmer_snps: Iterable[File],
         tmp_dir: Directory,
         *,
@@ -121,6 +122,8 @@ class VCFFilter:
         self.query_coverage = self.coverage_estimator \
             .fit(
                 vcf = vcf,
+                query = query,
+                gaps = gaps,
                 n_lines = n_coverage_sites,
                 min_depth = min_depth
             )
@@ -185,7 +188,7 @@ with low alternate base counts, and {vcf.low_ref_bc.sum()} variants with low ref
         )
 
         logging.info( 
-            f"Filtered out {vcf.snp_filter.eq("PASS").sum()} variants also found in the \
+            f"Filtered out {vcf.snp_filter.eq('PASS').sum()} variants also found in the \
 reference sequences."
         )
 
@@ -214,9 +217,13 @@ reference sequences."
         )
 
         # Join the probabilities with the full VCF DataFrame
-        vcf = vcf.join(
-            p_alt.rename("p_alt")
-        )
+        vcf = vcf.drop(
+            columns = "p_alt",
+            errors = "ignore"
+            ).join(
+                p_alt.rename("p_alt")
+            )
+        
         return self.__add_filter_tag(
             vcf = vcf,
             bias = 0.5

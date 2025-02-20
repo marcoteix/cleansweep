@@ -130,7 +130,11 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         if not hasattr(vcf, "p_alt"):
             vcf = vcf.assign(p_alt = vcf["info"] \
                 .apply(
-                    lambda x: 10**(-get_info_value(x, tag="CSP", dtype=int))
+                    lambda x: (
+                        10**(-get_info_value(x, tag="CSP", dtype=int))
+                        if "CSP=" in x 
+                        else pd.NA
+                    )
                 )
             )
                         

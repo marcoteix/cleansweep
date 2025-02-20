@@ -78,7 +78,7 @@ command \"{' '.join(cmd)}\". Got the following error: {rc.stdout}."
         
         return int(
             nbinom(
-                query_coverage,
+                int(query_coverage),
                 overdispersion
             ).ppf(
                 alpha
