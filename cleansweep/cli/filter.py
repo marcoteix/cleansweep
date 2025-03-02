@@ -1,10 +1,12 @@
 import argparse
 from pathlib import Path
 from typing import Iterable, Union
+
+import joblib
 from cleansweep.cli.commands import Subcommand
 from cleansweep.vcf import write_vcf
 from cleansweep.filter import VCFFilter
-from cleansweep.io import FilePath
+from cleansweep.typing import File, Directory
 from cleansweep.__version__ import __version__
 import logging
 
@@ -18,8 +20,8 @@ class FilterCmd(Subcommand):
     def add_arguments(self, parser: argparse.ArgumentParser):
         
         parser.add_argument("input", type=str, help="Input Pilon VCF file.")
-        parser.add_argument("query", type=str, help="ID of the query strain, as it \
-appears in the alignment files.")
+        parser.add_argument("prepare", type=str, help="Output .swp file from CleanSweep prepare \
+(cleansweep.prepare.swp).")
         parser.add_argument("output", type=str, help="Output directory.")
         parser.add_argument("--min_depth", "-dp", type=int, default=5, help="Minimum depth of coverage \
 for a site to be considered when filtering SNPs. SNPs at sites with fewer than this number of reads \
@@ -40,11 +42,6 @@ but may lead to a decrease in precision. The actual overdispersion estimated by 
 than this value.")     
         parser.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
 query depth of coverage. Defaults to %(default)s.", default=100000)
-        parser.add_argument("--nucmer_snps", "-snp", type=str, nargs="+", help="List of SNPs detected by \
-nucmer between the reference sequence for the query strain and each of the background reference sequences. \
-Can be generated with the show-snps subcommand of nucmer.", required=True) 
-        parser.add_argument("--gaps", "-g", type=str, help="File with gap limits in the reference sequence, \
-created by CleanSweep prepare (cleansweep.gaps.tsv).", required=True)   
         parser.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
         parser.add_argument("--n_chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
 Defaults to 5.")
@@ -61,10 +58,8 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         
     def run(
         self,
-        input: FilePath,
-        query: str,
-        gaps: FilePath,
-        nucmer_snps: Iterable[FilePath],
+        input: File,
+        prepare: File,
         n_coverage_sites: int,
         min_depth: int,
         min_alt_bc: int,
@@ -78,7 +73,7 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         threads: int,
         engine: str,
         verbosity: int,
-        output: FilePath,
+        output: Directory,
         **kwargs
     ):
         
@@ -102,16 +97,20 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
             parents = True
         )
 
+        # Read CleanSweep prepare file
+        logging.debug(f"Reading CleanSweep prepare file in {str(prepare)}...")
+        prepare_dict = joblib.load(prepare)
+
         # Filter
 
-        logging.info(f"Filtering {str(input)}, strain {query}...")
+        logging.info(f"Filtering {str(input)}, contigs {', '.join(prepare_dict['chrom'])}...")
 
         vcf_filter = VCFFilter(random_state = seed)
         vcf_out = vcf_filter.fit(
             vcf = input, 
-            gaps = gaps,
-            query = query,
-            nucmer_snps = nucmer_snps,
+            gaps = prepare_dict["gaps"],
+            query = prepare_dict["chrom"][0],
+            nucmer_snps = prepare_dict["snps"],
             tmp_dir = tmp_dir,
             n_coverage_sites = n_coverage_sites,
             min_depth = min_depth,
@@ -130,10 +129,11 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         logging.debug(
             f"Writing filtered VCF to {str(outdir.joinpath("cleansweep.variants.vcf"))}..."
         )
+        
         write_vcf(
             vcf = vcf_out,
             file = outdir.joinpath("cleansweep.variants.vcf"),
-            chrom = query,
+            chrom = prepare_dict['chrom'],
             ref = "unknown",
             version = __version__
         )

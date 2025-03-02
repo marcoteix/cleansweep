@@ -1,4 +1,6 @@
+from copy import deepcopy
 from dataclasses import dataclass
+import io
 from pathlib import Path 
 import pandas as pd
 import numpy as np
@@ -7,6 +9,7 @@ from cleansweep.typing import File, Directory
 from Bio import SeqIO
 import subprocess
 import shutil
+import joblib
 
 NUCMER_COORDS_HEADER = [
     "ref_start",
@@ -20,6 +23,21 @@ NUCMER_COORDS_HEADER = [
     "query_len",
     "ref",
     "query"
+]
+
+NUCMER_SNPS_HEADER = [
+    "pos",
+    "ref",
+    "alt",
+    "query_pos",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "ref_id",
+    "query_id"
 ]
 
 @dataclass
@@ -60,11 +78,25 @@ class NucmerAlignment:
         )
 
         with open(reference) as input_file, open(output_fasta, "w") as output_file:
+
+            reference_fasta = SeqIO.parse(input_file, "fasta")
+            
+            # Write to output file
             SeqIO.write(
-                SeqIO.parse(input_file, "fasta"),
+                reference_fasta,
                 output_file,
                 "fasta"
             )
+
+        # Extract contig IDs
+        with open(reference) as input_file:
+
+            reference_fasta = SeqIO.parse(input_file, "fasta")
+            
+            self.chrom = [
+                x.name
+                for x in reference_fasta
+            ]
 
         # For each query file, mask and write to output
         for record, files in file_map.items():
@@ -78,19 +110,25 @@ class NucmerAlignment:
             [x["coords"] for x in file_map.values()]
         )
 
-        # Write to the output directory
-        pd.DataFrame(
+        self.gaps = pd.DataFrame(
             self.gaps,
             columns = [
                 "start",
                 "end"
             ]
-        ).set_index("start") \
-        .to_csv(
+        ).set_index("start")
+
+        # Write gaps, snps, and contig names to output
+        joblib.dump(
+            {
+                "snps": deepcopy(self.snps),
+                "gaps": deepcopy(self.gaps),
+                "chrom": deepcopy(self.chrom)
+            },
             outdir.joinpath(
-                "cleansweep.gaps.tsv"
+                "cleansweep.prepare.swp"
             ),
-            sep = "\t"
+            compress = 3
         )
 
         if not keep_tmp:
@@ -110,18 +148,22 @@ class NucmerAlignment:
         tmp_dir.mkdir(exist_ok=True)
 
         self.__coords = {}
+        # Holds SNPs between references
+        self.snps = []
+
         for n, q in enumerate(queries):
 
             delta_file = str(tmp_dir.joinpath(f"nucmer.{n}.delta"))
             coords_file = str(tmp_dir.joinpath(f"nucmer.{n}.coords"))
-            snp_file = str(outdir.joinpath(f"nucmer.{n}.snps.tsv"))
 
             # Align with nucmer
             self.nucmer(reference, q, delta_file)
             # Convert .delta file to .coords
             self.get_coords(delta_file, coords_file)
             # Get SNPs
-            self.get_snps(delta_file, snp_file)
+            self.snps.append(
+                self.get_snps(delta_file)
+            )
 
             # Extract query ID and add to the map to coords files
             for record in SeqIO.parse(q, "fasta"):
@@ -131,6 +173,9 @@ class NucmerAlignment:
                     "fasta": q
                 }
 
+        self.snps = pd.concat(self.snps) \
+            .reset_index()
+        
         return self.__coords
 
     def nucmer(self, reference: File, query: File, output: File):
@@ -277,8 +322,7 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
     
     def get_snps(
         self,
-        delta: File,
-        output: File
+        delta: File
     ):
         
         cmd = [
@@ -299,14 +343,13 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
                 f"Command \"{' '.join(cmd)}\" failed with return code {rc.returncode}:\n{rc.stderr}"
             )
         
-        # Write SNP file
-        with open(
-            output,
-            mode = "w"
-        ) as file:
-            file.write(
+        return pd.read_table(
+            io.StringIO(
                 rc.stdout
-            )
+            ),
+            skiprows = 4,
+            names = NUCMER_SNPS_HEADER
+        )
 
     def get_gaps(
         self,

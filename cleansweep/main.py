@@ -2,11 +2,19 @@ from cleansweep.cli.filter import FilterCmd
 from cleansweep.cli.prepare import PrepareCmd
 from cleansweep.cli.inspect import InspectCmd
 from cleansweep.cli.commands import add_subcommand
+from cleansweep.__version__ import __version__
 import argparse
 from copy import deepcopy
 
 def main():
     parser = argparse.ArgumentParser("CleanSweep")
+
+    parser.add_argument(
+        "--version",
+        action = "version",
+        help = "Prints version and exits.",
+        version = f"%(prog)s v{__version__}"
+    )
 
     filter_cmd = FilterCmd()
     prepare_cmd = PrepareCmd()

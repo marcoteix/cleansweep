@@ -2,7 +2,7 @@
 
 cleansweep filter \
     test/data/test.vcf.gz \
-    "NZ_CP135691.1" \
+    test/outputs/prepare/cleansweep.prepare.swp \
     test/outputs/filter \
     -dp 5 \
     -a 10 \
@@ -15,5 +15,4 @@ cleansweep filter \
     -nb 10 \
     -t 1 \
     -Nc 10000 \
-    -snp test/data/nucmer/*.snps.tsv \
     -V 4

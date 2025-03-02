@@ -3,6 +3,8 @@ tests/
 
 # Test data
 test/data/
+test/data/references/
+test/data/nucmer/
 test/outputs/
 
 # Byte-compiled / optimized / DLL files

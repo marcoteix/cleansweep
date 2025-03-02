@@ -124,7 +124,7 @@ class CoverageEstimator:
         self,
         vcf: File,
         query: str,
-        gaps: File,
+        gaps: pd.DataFrame,
         n_lines: int = 100000,
         min_depth: int = 0,
         **kwargs
@@ -154,7 +154,7 @@ class CoverageEstimator:
         self,
         vcf: File,
         query: str,
-        gaps: File,
+        gaps: pd.DataFrame,
         n_lines: int = 100000
     ) -> ArrayLike:
         
@@ -272,19 +272,15 @@ class CoverageEstimator:
         self,
         vcf: File,
         query: str,
-        gaps: File,
+        gaps: pd.DataFrame,
         n_lines: int = 100000,
     ) -> pd.DataFrame:
         
-        # Read gaps file
-        gaps = pd.read_csv(
-            gaps,
-            sep = "\t"
-        )
+        gaps = gaps.reset_index()
 
         if not len(gaps):
             raise ValueError(
-                f"Found no gaps in {str(gaps)}. Cannot estimate the query depth of coverage."
+                f"Found no gaps. Cannot estimate the query depth of coverage."
             )
         
         # Create a string for the bcftools view region option

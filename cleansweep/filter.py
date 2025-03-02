@@ -1,12 +1,13 @@
 #%%
 from dataclasses import dataclass
-from typing import Union, Iterable
+from typing import List, Union, Iterable
 import numpy as np
 from cleansweep.coverage import CoverageFilter, CoverageEstimator
 from cleansweep.io import FilePath
 from cleansweep.mcmc import BaseCountFilter
 from cleansweep.typing import File, Directory
 from cleansweep.augment import AugmentVariantCalls
+from cleansweep.nucmer import NUCMER_SNPS_HEADER
 from pathlib import Path
 import pandas as pd
 import joblib
@@ -15,66 +16,26 @@ import logging
 from copy import deepcopy
 import logging
 
-NUCMER_SNPS_HEADER = [
-    "pos",
-    "ref",
-    "alt",
-    "query_pos",
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "ref_id",
-    "query_id"
-]
-
 class NucmerSNPFilter:
 
     def __init__(self):
         pass 
-
-    def read_snps(
-        self,
-        files: Iterable[File]
-    ) -> pd.DataFrame:
-        
-        logging.debug(
-            f"Reading SNPs among reference sequences in {' '.join(files)}..."
-        )
-        
-        return pd.concat(
-            [
-                pd.read_table(
-                    file,
-                    skiprows = 4,
-                    names = NUCMER_SNPS_HEADER
-                )
-                for file in files
-            ]
-        ).reset_index()
     
     def filter(
         self,
         vcf: pd.DataFrame,
-        nucmer_snps: Iterable[File]
+        nucmer_snps: pd.DataFrame
     ) -> pd.DataFrame:
-        
-        # Load SNPs
-        blacklist = self.read_snps(
-            nucmer_snps
-        )
 
         logging.debug( 
-            f"Found {len(blacklist)} SNPs among reference sequences."
+            f"Found {len(nucmer_snps)} SNPs among reference sequences."
         )
 
         # Fail SNPs in the input VCF also present in the set of nucmer SNPs
         return vcf.assign(
             snp_filter = vcf.pos \
                 .isin(
-                    blacklist.pos
+                    nucmer_snps.pos
                 ).replace(
                     {
                         True: "FAIL",
@@ -93,8 +54,8 @@ class VCFFilter:
         self, 
         query: str,
         vcf: File, 
-        gaps: File,
-        nucmer_snps: Iterable[File],
+        gaps: pd.DataFrame,
+        nucmer_snps: pd.DataFrame,
         tmp_dir: Directory,
         *,
         n_coverage_sites: int = 100000,
