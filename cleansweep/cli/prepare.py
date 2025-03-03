@@ -1,4 +1,5 @@
 import argparse
+import logging
 from pathlib import Path
 from typing import List, Union
 from cleansweep.cli.commands import Subcommand
@@ -18,7 +19,8 @@ class PrepareCmd(Subcommand):
         
         parser.add_argument("reference", type=str, help="Reference FASTA file (of the strain of interest) if \
 --file is not provided or the name of the strain of interest if --file is otherwise set.")
-        parser.add_argument("query", type=str, nargs="+", help="Query FASTAs for the background strains.")
+        parser.add_argument("--background", "-b", type=str, nargs="+", help="Reference FASTAs for the background \
+strains.", required=False)
         parser.add_argument("--output", "-o", type=str, required=True, help="Output directory.")
         parser.add_argument("--file", "-f", type=str, nargs="+", required=False, help="If provided, automatically \
 finds the FASTA files for the query and background strains given a set of StrainGST report TSV files with the \
@@ -32,17 +34,20 @@ in the directory. Ignored if --file is not provided.")
         parser.add_argument("--tmp", "-t", type=str, required=False, help="Writes temporary files to this \
 directory. If not set, writes to the same directory as the output file.")
         parser.add_argument("--keep-tmp", "-k", action="store_true", help="If set, keeps temporary files.")
+        parser.add_argument("--verbosity", "-V", type=int, choices = [0, 1, 2, 3, 4], help = "Logging verbosity. \
+Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
 
         nucmer_grp = parser.add_argument_group("Alignment options")
         nucmer_grp.add_argument("--min-identity", "-mi", type=float, help="Masks alignments with at least this \
 identity. Must be between 0 and 1. Default is %(default)f.", default=0.8)
         nucmer_grp.add_argument("--min-length", "-ml", type=int, help="Masks alignments of at least this length. \
 Default is %(default)d.", default=150)
+        
           
     def run(
         self,
         reference: Union[File, str],
-        query: List[File],
+        background: List[File],
         output: File,
         file: Union[List[File], None],
         database: Union[Directory, None],
@@ -50,8 +55,20 @@ Default is %(default)d.", default=150)
         keep_tmp: bool,
         min_identity: float,
         min_length: int,
+        verbosity: int = 1,
         **kwargs
     ):
+        
+        outdir = Path(output)
+        outdir.mkdir(parents=False, exist_ok=True)
+
+        # Set up logging
+        logging.basicConfig(
+            filename = outdir.joinpath("cleansweep.prepare.log"),
+            filemode = "w",
+            encoding = "utf-8",
+            level = (4-verbosity) * 10
+        )
         
         # Check if a file was provided
         if not file is None:
@@ -69,7 +86,7 @@ Default is %(default)d.", default=150)
             )
 
             reference = fastas["query"]
-            query = fastas["background"]
+            background = fastas["background"]
 
 
         nucmer = NucmerAlignment(
@@ -79,7 +96,7 @@ Default is %(default)d.", default=150)
 
         nucmer.prepare(
             reference = reference,
-            queries = query,
+            queries = background,
             output = output,
             tmp_dir = tmp,
             keep_tmp = keep_tmp

@@ -111,17 +111,17 @@ class StrainGSTParser:
 
         results = list(
             database_dir.glob(
-                f"*/{strain}.fa"
+                f"**/*{strain}.fa"
             )
         )
 
-        if len(results):
+        if len(results) > 1:
             raise RuntimeError(
                 f"Found multiple reference FASTA files for strain {strain}: {', '.join([str(x) for x in results])}."
             )
         elif not len(results):
             raise RuntimeError(
-                f"Could not find a reference FASTA for strain {strain} in {str(database_dir)}."
+                f"Could not find a reference FASTA for strain {strain} in {str(database_dir)}. Gob pattern: \"**/*{strain}.fa\""
             )
 
         return str(results[0])

@@ -1,0 +1,8 @@
+#!/bin/bash 
+
+cleansweep prepare \
+    Esch_coli_TUM2802 \
+    --file test/data/strainge/* \
+    --database test/data/references \
+    -o test/outputs/prepare \
+    -mi 0.95

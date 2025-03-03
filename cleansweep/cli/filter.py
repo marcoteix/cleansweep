@@ -133,7 +133,7 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         write_vcf(
             vcf = vcf_out,
             file = outdir.joinpath("cleansweep.variants.vcf"),
-            chrom = prepare_dict['chrom'],
+            chrom = prepare_dict['chrom'][0],
             ref = "unknown",
             version = __version__
         )
