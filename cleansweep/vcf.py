@@ -16,7 +16,7 @@ _VCF_HEADER = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "info", "fo
 @dataclass
 class VCF:
 
-    file: str
+    file: File
 
     def __post_init__(self):
 

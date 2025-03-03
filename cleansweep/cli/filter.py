@@ -23,13 +23,13 @@ class FilterCmd(Subcommand):
         parser.add_argument("prepare", type=str, help="Output .swp file from CleanSweep prepare \
 (cleansweep.prepare.swp).")
         parser.add_argument("output", type=str, help="Output directory.")
-        parser.add_argument("--min_depth", "-dp", type=int, default=5, help="Minimum depth of coverage \
+        parser.add_argument("--min-depth", "-dp", type=int, default=5, help="Minimum depth of coverage \
 for a site to be considered when filtering SNPs. SNPs at sites with fewer than this number of reads \
 in pileups are automatically excluded and these sites are also ignored when estimating the depth of \
 coverage for the query strain.")
-        parser.add_argument("--min_alt_bc", "-a", type=int, default=10, help="Minimum alternate \
+        parser.add_argument("--min-alt-bc", "-a", type=int, default=10, help="Minimum alternate \
 allele base count for a variant to pass the CleanSweep filters. The default is 10.")
-        parser.add_argument("--min_ref_bc", "-r", type=int, default=10, help="Variants with fewer than \
+        parser.add_argument("--min-ref-bc", "-r", type=int, default=10, help="Variants with fewer than \
 this number of reference allele base counts pass the CleanSweep filters automatically.")
         parser.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
 Pilon output VCF file used to fit the CleanSweep filters. If a float, uses that proportion of lines. Defaults \
@@ -43,11 +43,11 @@ than this value.")
         parser.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
 query depth of coverage. Defaults to %(default)s.", default=100000)
         parser.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
-        parser.add_argument("--n_chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
+        parser.add_argument("--n-chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
 Defaults to 5.")
-        parser.add_argument("--n_draws", "-nd", type=int, default=10000, help="Number of MCMC sampling \
+        parser.add_argument("--n-draws", "-nd", type=int, default=10000, help="Number of MCMC sampling \
 iterations. Defaults to 10000.")
-        parser.add_argument("--n_burnin", "-nb", type=int, default=1000, help="Number of burn-in MCMC \
+        parser.add_argument("--n-burnin", "-nb", type=int, default=1000, help="Number of burn-in MCMC \
 sampling iterations. Defaults to 1000.")
         parser.add_argument("--threads", "-t", type=int, default=1, help="Number of threads used in \
 MCMC. Defaults to 1.")
