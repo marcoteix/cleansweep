@@ -17,7 +17,6 @@ COPY --chown=$MAMBA_USER:$MAMBA_USER cleansweep /tmp/cleansweep/cleansweep
 COPY --chown=$MAMBA_USER:$MAMBA_USER setup.py /tmp/cleansweep 
 COPY --chown=$MAMBA_USER:$MAMBA_USER pyproject.toml /tmp/cleansweep 
 COPY --chown=$MAMBA_USER:$MAMBA_USER LICENSE /tmp/cleansweep 
-COPY --chown=$MAMBA_USER:$MAMBA_USER __init__.py /tmp/cleansweep 
 COPY --chown=$MAMBA_USER:$MAMBA_USER README.md /tmp/cleansweep 
 
  
