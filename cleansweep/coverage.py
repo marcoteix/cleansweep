@@ -286,7 +286,11 @@ class CoverageEstimator:
         # Create a string for the bcftools view region option
         region = ",".join(
             [ 
-                query + ":" + str(x.start) + "-" + str(x.end)
+                query + ":" + str(x.start) + "-" + str(
+                    x.end
+                    if x.end != -1
+                    else ""
+                )
                 for _, x in gaps.iterrows()
             ]
         )

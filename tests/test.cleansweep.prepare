@@ -1,0 +1,7 @@
+#!/bin/bash 
+
+cleansweep prepare \
+    test/data/references/query.Esch_coli_TUM2802.fa \
+    -b test/data/references/background.*.fa \
+    -o test/outputs/prepare \
+    -mi 0.95 -V 4

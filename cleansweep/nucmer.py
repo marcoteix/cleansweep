@@ -62,17 +62,13 @@ class NucmerAlignment:
         
         if tmp_dir is None: 
             tmp_dir = outdir.joinpath("tmp")
-
-        # Align queries to the reference with nucmer
-        file_map = self.align(
-            reference = reference,
-            queries = queries,
-            outdir = outdir,
-            tmp_dir = tmp_dir
+        
+        tmp_dir = Path(tmp_dir)
+        tmp_dir.mkdir(
+            exist_ok = True
         )
 
         # Write reference FASTA to output
-
         output_fasta = outdir.joinpath(
             "cleansweep.reference.fa"
         )
@@ -98,18 +94,46 @@ class NucmerAlignment:
                 for x in reference_fasta
             ]
 
-        # For each query file, mask and write to output
-        for record, files in file_map.items():
+        if not queries is None:
 
-            coords = self.read_coords(files["coords"])
-            with open(output_fasta, "a") as output_file:
-                self.mask(coords, files["fasta"], record, output_file)
+            # Align queries to the reference with nucmer
+            file_map = self.align(
+                reference = reference,
+                queries = queries,
+                outdir = outdir,
+                tmp_dir = tmp_dir
+            )
 
-        # Get a list of unaligned regions in the reference
-        self.gaps = self.get_gaps(
-            [x["coords"] for x in file_map.values()]
-        )
+            # For each query file, mask and write to output
+            for record, files in file_map.items():
 
+                coords = self.read_coords(files["coords"])
+                with open(output_fasta, "a") as output_file:
+                    self.mask(coords, files["fasta"], record, output_file)
+
+            # Get a list of unaligned regions in the reference
+            self.gaps = self.get_gaps(
+                [x["coords"] for x in file_map.values()]
+            )
+
+        else:
+
+            # There is nothing to align nor more FASTAs to write to the reference
+            # self.snps should be an empty DataFrame
+            # self.gaps should span the full reference
+
+            # Get the start and end positions for each contig in the reference
+            with open(reference) as input_file:
+                self.gaps = [
+                    [1, len(x)]
+                    for x in SeqIO.parse(input_file, "fasta")
+                ]
+
+            self.snps = pd.DataFrame(
+                [],
+                columns = NUCMER_SNPS_HEADER
+            )
+            
         self.gaps = pd.DataFrame(
             self.gaps,
             columns = [
@@ -141,7 +165,7 @@ class NucmerAlignment:
         outdir: Directory,
         tmp_dir: Directory
     ) -> Dict[str, Dict[str, str]]:
-        
+                
         outdir = Path(outdir)
         outdir.mkdir(exist_ok=True)
         tmp_dir = Path(tmp_dir)
@@ -287,7 +311,7 @@ class NucmerAlignment:
                 raise RuntimeError(f"Something went wrong! Counter is {counter} (< 0). \
 start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}.")
 
-        return [(a, b) for a,b in zip([0]+mask_ends, mask_starts+[-1])]
+        return [(a, b) for a,b in zip([1]+mask_ends, mask_starts+[-1])]
             
     def mask(
         self, 

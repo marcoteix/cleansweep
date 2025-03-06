@@ -1,11 +1,13 @@
 # Development tests
-tests/
+tests.deprecated/
 
 # Test data
-test/data/
-test/data/references/
-test/data/nucmer/
-test/outputs/
+tests/data/
+tests/data/references/
+tests/data/nucmer/
+tests/outputs/
+
+.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

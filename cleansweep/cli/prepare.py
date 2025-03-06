@@ -19,7 +19,7 @@ class PrepareCmd(Subcommand):
         
         parser.add_argument("reference", type=str, help="Reference FASTA file (of the strain of interest) if \
 --file is not provided or the name of the strain of interest if --file is otherwise set.")
-        parser.add_argument("--background", "-b", type=str, nargs="+", help="Reference FASTAs for the background \
+        parser.add_argument("--background", "-b", type=str, nargs="*", help="Reference FASTAs for the background \
 strains.", required=False)
         parser.add_argument("--output", "-o", type=str, required=True, help="Output directory.")
         parser.add_argument("--file", "-f", type=str, nargs="+", required=False, help="If provided, automatically \

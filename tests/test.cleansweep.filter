@@ -1,0 +1,18 @@
+#!/bin/bash
+
+cleansweep filter \
+    test/data/test.vcf.gz \
+    test/outputs/prepare/cleansweep.prepare.swp \
+    test/outputs/filter \
+    -dp 5 \
+    -a 10 \
+    -r 10 \
+    -d 200 \
+    -v 0.55 \
+    -s 23 \
+    -nc 1 \
+    -nd 1000 \
+    -nb 10 \
+    -t 1 \
+    -Nc 10000 \
+    -V 4
