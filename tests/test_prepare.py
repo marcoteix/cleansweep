@@ -24,10 +24,35 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             "cleansweep",
             "prepare",
             str(reference_fasta),
+            "--background",
             "-o",
             str(
                 outdir.joinpath(
                     "test_no_background_strain"
+                )
+            ),
+            "-V", "4",
+            "-mi", "0.95"
+        ]
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+
+    def test_no_background_option(self):
+
+        cmd = [
+            "cleansweep",
+            "prepare",
+            str(reference_fasta),
+            "-o",
+            str(
+                outdir.joinpath(
+                    "test_no_background_option"
                 )
             ),
             "-V", "4",

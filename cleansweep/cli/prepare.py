@@ -58,7 +58,7 @@ Default is %(default)d.", default=150)
         verbosity: int = 1,
         **kwargs
     ):
-        
+                
         outdir = Path(output)
         outdir.mkdir(parents=False, exist_ok=True)
 

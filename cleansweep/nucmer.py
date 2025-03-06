@@ -94,7 +94,10 @@ class NucmerAlignment:
                 for x in reference_fasta
             ]
 
-        if not queries is None:
+        if (
+            not queries is None and \
+            len(queries)
+        ):
 
             # Align queries to the reference with nucmer
             file_map = self.align(
