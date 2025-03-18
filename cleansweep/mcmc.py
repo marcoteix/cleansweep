@@ -17,6 +17,7 @@ class BaseCountFilter:
     power: float = 0.95
     threads: Union[int, None] = 5
     engine: str = "pymc"
+    overdispersion_bias: int = 500
 
     def __post_init__(self):
 
@@ -85,8 +86,8 @@ class BaseCountFilter:
             # distribution)
             query_overdispersion = pm.Beta(
                 "query_overdispersion", 
-                alpha = 500, 
-                beta = 500, 
+                alpha = self.overdispersion_bias, 
+                beta = self.overdispersion_bias, 
                 initval = 0.5
             )
 

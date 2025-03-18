@@ -18,43 +18,63 @@ class FilterCmd(Subcommand):
     """
 
     def add_arguments(self, parser: argparse.ArgumentParser):
+
+        io_grp = parser.add_argument_group(
+            "Input/Output",
+            "Input and output options."
+        )
         
-        parser.add_argument("input", type=str, help="Input Pilon VCF file.")
-        parser.add_argument("prepare", type=str, help="Output .swp file from CleanSweep prepare \
+        io_grp.add_argument("input", type=str, help="Input Pilon VCF file.")
+        io_grp.add_argument("prepare", type=str, help="Output .swp file from CleanSweep prepare \
 (cleansweep.prepare.swp).")
-        parser.add_argument("output", type=str, help="Output directory.")
-        parser.add_argument("--min-depth", "-dp", type=int, default=5, help="Minimum depth of coverage \
+        io_grp.add_argument("output", type=str, help="Output directory.")
+        io_grp.add_argument("--verbosity", "-V", type=int, choices = [0, 1, 2, 3, 4], help = "Logging verbosity. \
+Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
+
+        params_grp = parser.add_argument_group(
+            "Filtering options",
+            "Parameters and options for the CleanSweep filter."
+        )
+
+        params_grp.add_argument("--min-depth", "-dp", type=int, default=5, help="Minimum depth of coverage \
 for a site to be considered when filtering SNPs. SNPs at sites with fewer than this number of reads \
 in pileups are automatically excluded and these sites are also ignored when estimating the depth of \
 coverage for the query strain.")
-        parser.add_argument("--min-alt-bc", "-a", type=int, default=10, help="Minimum alternate \
+        params_grp.add_argument("--min-alt-bc", "-a", type=int, default=10, help="Minimum alternate \
 allele base count for a variant to pass the CleanSweep filters. The default is 10.")
-        parser.add_argument("--min-ref-bc", "-r", type=int, default=10, help="Variants with fewer than \
+        params_grp.add_argument("--min-ref-bc", "-r", type=int, default=10, help="Variants with fewer than \
 this number of reference allele base counts pass the CleanSweep filters automatically.")
-        parser.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
+        params_grp.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
 Pilon output VCF file used to fit the CleanSweep filters. If a float, uses that proportion of lines. Defaults \
 to 500.") 
-        parser.add_argument("--max-overdispersion", "-v", type=float, default=0.55, help="Maximum \
+        params_grp.add_argument("--max-overdispersion", "-v", type=float, default=0.55, help="Maximum \
 overdispersion for the depth of coverage of the query strain. This value is only used to detect variants \
 with low alternate allele base counts not reported by the variant caller. Increasing this overdispersion \
 will lead to more variants being called, with lower alternate allele base counts. This increases recall \
 but may lead to a decrease in precision. The actual overdispersion estimated by CleanSweep may be greater \
-than this value.")     
-        parser.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
+than this value.")
+        params_grp.add_argument("--overdispersion-bias", "-ob", type=int, help="Controls the overdispersion \
+prior for the query strain. More specifically, it is the value of the alpha and beta parameters of a Beta \
+distribution: greater values lead to an overdispersion closer to 0.5. Defaults to %(default)s.", default=500)
+        params_grp.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
 query depth of coverage. Defaults to %(default)s.", default=100000)
-        parser.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
-        parser.add_argument("--n-chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
+        params_grp.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")
+
+        mcmc_grp = parser.add_argument_group(
+            "MCMC options",
+            "Options for MCMC estimation."
+        )
+
+        mcmc_grp.add_argument("--n-chains", "-nc", type=int, default=5, help="Number of MCMC chains. \
 Defaults to 5.")
-        parser.add_argument("--n-draws", "-nd", type=int, default=10000, help="Number of MCMC sampling \
+        mcmc_grp.add_argument("--n-draws", "-nd", type=int, default=10000, help="Number of MCMC sampling \
 iterations. Defaults to 10000.")
-        parser.add_argument("--n-burnin", "-nb", type=int, default=1000, help="Number of burn-in MCMC \
+        mcmc_grp.add_argument("--n-burnin", "-nb", type=int, default=1000, help="Number of burn-in MCMC \
 sampling iterations. Defaults to 1000.")
-        parser.add_argument("--threads", "-t", type=int, default=1, help="Number of threads used in \
+        mcmc_grp.add_argument("--threads", "-t", type=int, default=1, help="Number of threads used in \
 MCMC. Defaults to 1.")
-        parser.add_argument("--engine", "-e", type=str, default="pymc", choices=["pymc", "numpyro", "nutpie"], 
+        mcmc_grp.add_argument("--engine", "-e", type=str, default="pymc", choices=["pymc", "numpyro", "nutpie"], 
 help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
-        parser.add_argument("--verbosity", "-V", type=int, choices = [0, 1, 2, 3, 4], help = "Logging verbosity. \
-Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         
     def run(
         self,
@@ -74,6 +94,7 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         engine: str,
         verbosity: int,
         output: Directory,
+        overdispersion_bias: int,
         **kwargs
     ):
         
@@ -122,7 +143,8 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
             draws = n_draws,
             burn_in = n_burnin,
             threads = threads,
-            engine = engine
+            engine = engine,
+            overdispersion_bias = overdispersion_bias
         )
 
         # Write the output VCF
