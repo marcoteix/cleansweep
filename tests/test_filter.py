@@ -18,6 +18,7 @@ opts = [
     "-r", "0",
     "-d", "50",
     "-v", "0.55",
+    "-ob", "500",
     "-Nc", "1000",
     "-s", "23",
     "-nc", "1",
@@ -28,6 +29,42 @@ opts = [
 ]
 
 class TestCleanSweepPrepareCLI(unittest.TestCase):
+
+    def test_init_eval_fail_overdispersion(self):
+
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "test.vcf.gz"
+                )
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_init_eval_fail_overdispersion"
+                )
+            )
+        ] + [
+            x
+            if x != "500"
+            else "100" 
+            for x in opts
+        ]
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
 
     def test_no_shared_regions(self):
 

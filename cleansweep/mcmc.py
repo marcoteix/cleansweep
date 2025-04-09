@@ -70,7 +70,8 @@ class BaseCountFilter:
             alt_prob = pm.Beta(
                 "alt_prob",
                 alpha = 1,
-                beta = 1
+                beta = 1,
+                initval = "prior"
             )
 
             # Indicates if the query strain has the alt allele (1) or the 
@@ -78,7 +79,8 @@ class BaseCountFilter:
             alleles = pm.Bernoulli(
                 "alleles", 
                 p = alt_prob, 
-                dims="sites"
+                dims = "sites",
+                initval = "prior"
             )
 
             # Models the overdispersion for the depth of coverage of the 
