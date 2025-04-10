@@ -2,6 +2,7 @@
 from typing import Union
 import numpy as np
 import pymc as pm
+from pymc.exceptions import SamplingError
 from dataclasses import dataclass
 import pandas as pd
 import pytensor.tensor as pt
@@ -85,12 +86,26 @@ class BaseCountFilter:
 
             # Models the overdispersion for the depth of coverage of the 
             # query strain. Strong prior around 0.5 (approximates a Poisson
-            # distribution)
+            # distribution). Use a normal distribution as prior as using a 
+            # Beta distribution leads to inf likelihood (although it should
+            # not)
+            """
             query_overdispersion = pm.Beta(
                 "query_overdispersion", 
                 alpha = self.overdispersion_bias, 
                 beta = self.overdispersion_bias, 
-                initval = 0.5
+                initval = 0.6
+            )
+            """
+            query_overdispersion = pm.Normal(
+                "query_overdispersion",
+                mu = 0.5,
+                sigma = self.overdispersion_bias
+            )
+
+            query_overdispersion = pm.math.clip(
+                query_overdispersion,
+                0.1, 0.9
             )
 
             # Model the depth of coverage at each position in the query
@@ -133,14 +148,33 @@ class BaseCountFilter:
 burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sampler: {self.engine}."
             )
 
-            self.sampling_results = pm.sample(
-                chains=self.chains, 
-                draws=self.draws, 
-                random_seed=self.random_state, 
-                tune=self.burn_in, 
-                cores=self.threads,
-                nuts_sampler=self.engine
-            )
+            try:
+                self.sampling_results = pm.sample(
+                    chains=self.chains, 
+                    draws=self.draws, 
+                    random_seed=self.random_state, 
+                    tune=self.burn_in, 
+                    cores=self.threads,
+                    nuts_sampler=self.engine,
+                    initvals = {
+                        "query_overdispersion": 0.6
+                    }
+                )
+
+            except SamplingError as e:
+
+                print(
+                    model.debug(
+                        verbose = True
+                    )
+                )
+
+                print(
+                    "Observed data:\n",
+                    vcf_fit.alt_bc.values
+                )
+
+                raise e
             
             # Predict for the full data 
             logging.debug(
