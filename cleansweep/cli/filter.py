@@ -53,7 +53,7 @@ with low alternate allele base counts not reported by the variant caller. Increa
 will lead to more variants being called, with lower alternate allele base counts. This increases recall \
 but may lead to a decrease in precision. The actual overdispersion estimated by CleanSweep may be greater \
 than this value.")
-        params_grp.add_argument("--overdispersion-bias", "-ob", type=int, help="Controls the overdispersion \
+        params_grp.add_argument("--overdispersion-bias", "-ob", type=float, help="Controls the overdispersion \
 prior for the query strain. More specifically, it is the value of the alpha and beta parameters of a Beta \
 distribution: greater values lead to an overdispersion closer to 0.5. Defaults to %(default)s.", default=500)
         params_grp.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
