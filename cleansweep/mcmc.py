@@ -116,10 +116,11 @@ class BaseCountFilter:
             )
 
             # Model the background allele depth as a uniform distribution
+            # Add a 5 bp pad to ensure the likelihood does not explode
             max_bc = np.maximum(
                 vcf.alt_bc.max(),
                 vcf.ref_bc.max()
-            )
+            ) + 5
 
             background = pm.Categorical.dist(
                 p = np.ones(max_bc) / max_bc,
