@@ -21,8 +21,8 @@ class AugmentVariantCalls:
 (INFO/BC[1] > {min_alt_bc} & REF != \"C\") | \
 (INFO/BC[2] > {min_alt_bc} & REF != \"G\") | \
 (INFO/BC[3] > {min_alt_bc} & REF != \"T\") | \
-ALT!=\".\""
-
+(INFO/AC > 0 & FILTER=\"PASS\")"
+        
         cmd = [
             "bcftools",
             "view",

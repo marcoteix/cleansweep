@@ -69,7 +69,8 @@ class VCFFilter:
         burn_in: int = 1000,
         power: float = 0.975,
         threads: int = 5,
-        engine: str = "pymc"
+        engine: str = "pymc",
+        overdispersion_bias: int = 500
     ) -> pd.Series:   
     
         # Step 1: estimate the coverage of the background strain
@@ -161,7 +162,8 @@ reference sequences."
             burn_in=burn_in,
             power=power, 
             threads=threads, 
-            engine=engine
+            engine=engine,
+            overdispersion_bias=overdispersion_bias
         )
         
         # Fit and get the probabilities of the query having the alternate allele
