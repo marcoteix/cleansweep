@@ -47,7 +47,7 @@ this number of reference allele base counts pass the CleanSweep filters automati
         params_grp.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
 Pilon output VCF file used to fit the CleanSweep filters. If a float, uses that proportion of lines. Defaults \
 to 500.") 
-        params_grp.add_argument("--max-overdispersion", "-v", type=float, default=0.55, help="Maximum \
+        params_grp.add_argument("--max-overdispersion", "-v", type=float, default=0.1, help="Maximum \
 overdispersion for the depth of coverage of the query strain. This value is only used to detect variants \
 with low alternate allele base counts not reported by the variant caller. Increasing this overdispersion \
 will lead to more variants being called, with lower alternate allele base counts. This increases recall \
@@ -55,7 +55,7 @@ but may lead to a decrease in precision. The actual overdispersion estimated by 
 than this value.")
         params_grp.add_argument("--overdispersion-bias", "-ob", type=float, help="Controls the overdispersion \
 prior for the query strain. More specifically, it is the value of the alpha and beta parameters of a Beta \
-distribution: greater values lead to an overdispersion closer to 0.5. Defaults to %(default)s.", default=500)
+distribution: greater values lead to an overdispersion closer to 0.5. Defaults to %(default)s.", default=1)
         params_grp.add_argument("--n-coverage-sites", "-Nc", type=int, help="Number of sites used to estimate the \
 query depth of coverage. Defaults to %(default)s.", default=100000)
         params_grp.add_argument("--seed", "-s", type=int, default=23, help="Random seed.")

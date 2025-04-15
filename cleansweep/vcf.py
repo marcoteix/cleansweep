@@ -247,16 +247,20 @@ def write_vcf(
                     "PILON=" + x["filter"],
                     "CSP=" + str(
                         np.minimum(
-                            int(
-                                -100*np.log10(
-                                    x["p_alt"] + 1e-100 
-                                    if (
-                                        "p_alt" in x and \
-                                        not pd.isna(x["p_alt"]) 
-                                    )
-                                    else 1e-100
+                                int(
+                                    np.nan_to_num(
+                                    -1*np.log10(
+                                        x["p_alt"] + 1e-10 
+                                        if (
+                                            "p_alt" in x and \
+                                            not pd.isna(x["p_alt"]) \
+                                            and not x["p_alt"] is None
+                                        )
+                                        else 1e-10
+                                    ),
+                                    nan = 0
                                 )
-                            ),
+                            ),    
                             100000
                         )
                     ),
