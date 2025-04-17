@@ -189,7 +189,7 @@ reference sequences."
         
         return self.__add_filter_tag(
             vcf = vcf,
-            bias = 1
+            bias = 0
         )
 
     def save_samples(self, path: FilePath) -> None:

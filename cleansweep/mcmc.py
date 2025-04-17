@@ -205,21 +205,25 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
         ) 
 
         # Likelihood given alt allele depths
-        logp_alt = np.maximum( 
+        logp_alt = np.nan_to_num(
             pm.logp(
                 dist_query,
-                observed["alt_bc"].values
+                observed["ref_bc"].values
             ).eval(),
-            1e-10
+            nan = -100,
+            posinf = 0,
+            neginf = -100
         )
 
         # Likelihood given reference allele depths
-        logp_ref = np.maximum( 
+        logp_ref = np.nan_to_num(
             pm.logp(
                 dist_query,
-                observed["ref_bc"]
+                observed["ref_bc"].values
             ).eval(),
-            1e-10
+            nan = -100,
+            posinf = 0,
+            neginf = -100
         )
 
         # Prior logodds

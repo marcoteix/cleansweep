@@ -4,7 +4,7 @@ from typing import Iterable, Union
 
 import joblib
 from cleansweep.cli.commands import Subcommand
-from cleansweep.vcf import write_vcf
+from cleansweep.vcf import write_vcf, VCF
 from cleansweep.filter import VCFFilter
 from cleansweep.typing import File, Directory
 from cleansweep.__version__ import __version__
@@ -155,9 +155,8 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         write_vcf(
             vcf = vcf_out,
             file = outdir.joinpath("cleansweep.variants.vcf"),
+            header = VCF(str(input)).get_header(),
             chrom = prepare_dict['chrom'][0],
-            ref = "unknown",
-            version = __version__
         )
 
         # Save the filter and MCMC results

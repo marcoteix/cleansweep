@@ -1,5 +1,6 @@
 from datetime import date
 from functools import partial
+import sys
 import pandas as pd
 import subprocess
 from typing import Union, Collection
@@ -9,6 +10,7 @@ from pathlib import Path
 import logging
 from io import StringIO
 from cleansweep.typing import File
+from cleansweep.__version__ import __version__
 
 _VCF_HEADER = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "info", "format", "sample"]
 
@@ -76,6 +78,31 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             self.vcf = self.add_info_columns(self.vcf)
 
         return self.vcf
+    
+    def get_header(
+        self
+    ) -> str:
+        """Returns the header of this VCF.
+
+        Returns:
+            str: Header
+        """
+        
+        command = ["bcftools", "view", str(self.file), "-h"]
+
+        # Run command
+        logging.info(f"Running \"{' '.join(command)}\"...")
+        rc = subprocess.run(command, stdout=subprocess.PIPE)
+
+        if rc.returncode != 0:
+            msg = f"Filtering the VCF file in {self.file} with bcftools failed. Got return \
+code {rc.returncode}. Command: \'{' '.join(command)}\'."
+            logging.error(msg)
+            logging.error("stout dump:")
+            logging.error(rc.stdout)
+            raise RuntimeError(msg)
+        
+        return rc.stdout.decode("utf-8")
 
     def exclude_indels(self, vcf: Union[None, pd.DataFrame]=None) -> pd.DataFrame:
 
@@ -186,48 +213,63 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None
 
+def format_vcf_header(
+    header: str,
+    chrom: Union[None, str] = None,
+    ref: Union[None, File, str] = None
+) -> str:
+    
+    lines = []
+
+    for line in header.split("\n"):
+
+        if line.startswith("##fileformat="):
+            # Update VCF version
+            line = "##fileformat=VCFv4.2"
+
+        elif line.startswith("##fileDate="):
+            # Update date
+            line = f"##fileDate={date.today().strftime('%Y%m%d')}"
+
+        elif line.startswith("##source="):
+            # Update source
+            line = f"##source=\"CleanSweep version {__version__}\""
+
+        lines.append(line)
+
+    # Add descriptors for CleanSweep fields
+    new_lines = [
+        f"##CleanSweepCommand=\"{' '.join(sys.argv)}\"",
+        "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
+        "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
+        "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
+        "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">"
+    ]
+    
+    if not chrom is None:
+        new_lines.append(f"##CleanSweepChrom=\"{chrom}\"")
+
+    if not ref is None:
+        new_lines.append(
+            f"##CleanSweepReference=\"{str(ref)}\""
+        )
+
+    lines = lines[:-2] + new_lines + lines[-2:-1]
+
+    return "\n".join(lines)
+
 def write_vcf(
     vcf: pd.DataFrame,
     file: File,
+    header: str,
     chrom: str,
-    ref: File,
-    version: str
 ):
     
-    header = f"""##fileformat=VCFv4.2
-##fileDate={date.today().strftime("%Y%m%d")}
-##source="CleanSweep version {version}"
-##reference=file:{ref}
-##contig=<ID={chrom}>
-##FILTER=<ID=PASS,Description="All filters passed">
-##FILTER=<ID=LowAltBC,Description="Low alternate allele depth">
-##FILTER=<ID=RefVar,Description="Variant explained by variation between references for the background and query strains">
-##FILTER=<ID=LowCov,Description="Low depth of coverage">
-##FILTER=<ID=FAIL,Description="Variant not present in the query strain">
-##INFO=<ID=DP,Number=1,Type=Integer,Description="Valid read depth; some reads may have been filtered">
-##INFO=<ID=TD,Number=1,Type=Integer,Description="Total read depth including bad pairs">
-##INFO=<ID=PC,Number=1,Type=Integer,Description="Physical coverage of valid inserts across locus">
-##INFO=<ID=BQ,Number=1,Type=Integer,Description="Mean base quality at locus">
-##INFO=<ID=MQ,Number=1,Type=Integer,Description="Mean read mapping quality at locus">
-##INFO=<ID=QD,Number=1,Type=Integer,Description="Variant confidence/quality by depth">
-##INFO=<ID=BC,Number=4,Type=Integer,Description="Count of As, Cs, Gs, Ts at locus">
-##INFO=<ID=QP,Number=4,Type=Integer,Description="Percentage of As, Cs, Gs, Ts weighted by Q & MQ at locus">
-##INFO=<ID=IC,Number=1,Type=Integer,Description="Number of reads with insertion here">
-##INFO=<ID=DC,Number=1,Type=Integer,Description="Number of reads with deletion here">
-##INFO=<ID=XC,Number=1,Type=Integer,Description="Number of reads clipped here">
-##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes, for each ALT allele, in the same order as listed">
-##INFO=<ID=AF,Number=A,Type=Float,Description="Fraction of evidence in support of alternate allele(s)">
-##INFO=<ID=IMPRECISE,Number=0,Type=Flag,Description="Imprecise change from local reassembly (ALT contains Ns)">
-##INFO=<ID=PILON,Number=1,Type=String,Description="Original Pilon FILTER flag">
-##INFO=<ID=CSP,Number=1,Type=Integer,Description="CleanSweep probability of a variant being present in the query strain, -100*log10 transformed">
-##INFO=<ID=RD,Number=1,Type=Integer,Description="Reference allele base count">
-##INFO=<ID=AD,Number=1,Type=Integer,Description="Main alternate allele base count">
-##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
-##FORMAT=<ID=AD,Number=.,Type=String,Description="Allelic depths for the ref and alt alleles in the order listed">
-##FORMAT=<ID=DP,Number=1,Type=String,Description="Approximate read depth; some reads may have been filtered">
-##ALT=<ID=DUP,Description="Possible segmental duplication">
-#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE"""
-    
+    header = format_vcf_header(
+        header,
+        chrom = chrom
+    )
+        
     # Subset the columns in the VCF spec and add fields to INFO 
     fmt_vcf = vcf[
         _VCF_HEADER
@@ -240,28 +282,30 @@ def write_vcf(
         columns = "FILTER"
     ).assign(
         FILTER = vcf.cleansweep_filter if "cleansweep_filter" in vcf else ".",
+        SAMPLE = (
+            vcf.cleansweep_filter \
+                .eq("PASS") \
+                .astype("Int8")
+            if "cleansweep_filter" in vcf
+            else vcf["sample"]
+        ),
         INFO = vcf.apply(
             lambda x: ";".join(
                 [
                     x["info"],
                     "PILON=" + x["filter"],
                     "CSP=" + str(
-                        np.minimum(
-                                int(
-                                    np.nan_to_num(
-                                    -1*np.log10(
-                                        x["p_alt"] + 1e-10 
-                                        if (
-                                            "p_alt" in x and \
-                                            not pd.isna(x["p_alt"]) \
-                                            and not x["p_alt"] is None
-                                        )
-                                        else 1e-10
-                                    ),
-                                    nan = 0
+                        int(
+                            np.nan_to_num(
+                                x["p_alt"]
+                                if (
+                                    "p_alt" in x and \
+                                    not pd.isna(x["p_alt"]) \
+                                    and not x["p_alt"] is None
                                 )
-                            ),    
-                            100000
+                                else 0,
+                                nan = 0
+                            )
                         )
                     ),
                     "RD=" + (

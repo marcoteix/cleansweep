@@ -3,7 +3,7 @@ from cleansweep.__version__ import __version__
 
 # Read test VCF
 vcf = VCF(
-    "test/data/test.vcf.gz"
+    "tests/data/pilon/test.small.vcf.gz"
 )
 
 vcf_df = vcf.read(
@@ -15,8 +15,7 @@ print(vcf_df.head())
 # Write first 10 lines
 write_vcf(
     vcf_df.iloc[:10],
-    "test/outputs/vcf/test.vcf",
-    chrom = "NZ_CP135691.1",
-    ref = "test.fa",
-    version = __version__
+    "tests/outputs/vcf/test.vcf",
+    header = vcf.get_header(),
+    chrom = "NZ_CP135691.1"
 )
