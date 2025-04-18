@@ -209,7 +209,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
         logp_alt = np.nan_to_num(
             pm.logp(
                 dist_query,
-                observed["ref_bc"].values
+                observed["alt_bc"].values
             ).eval(),
             nan = -100,
             posinf = 0,
@@ -290,15 +290,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
             query_coverage_estimate,
             "alt_bc"
         )
-        print(
-            pd.concat(
-                [
-                    observed.alt_bc,
-                    alternate_cdf
-                ],
-                axis = 1
-            )
-        )
+
         # NOTE: May want to check only if <95%
         alt_evidence = (
             alternate_cdf.gt(self.__quantiles[0]) & \
