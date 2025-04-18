@@ -240,6 +240,7 @@ def format_vcf_header(
     # Add descriptors for CleanSweep fields
     new_lines = [
         f"##CleanSweepCommand=\"{' '.join(sys.argv)}\"",
+        "##FILTER=<ID=RefVar,Description=\"Variant also present in the references\">",
         "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
         "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
         "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
@@ -303,8 +304,8 @@ def write_vcf(
                                     not pd.isna(x["p_alt"]) \
                                     and not x["p_alt"] is None
                                 )
-                                else 0,
-                                nan = 0
+                                else 1,
+                                nan = 1
                             )
                         )
                     ),

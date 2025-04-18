@@ -169,6 +169,15 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                 )
 
                 raise e
+
+            # Transform dispersion
+            self.dist_params = self.__get_distribution_params(self.sampling_results)
+
+            self.dist_params["query_overdispersion"] = query_coverage_estimate * (
+                10**(
+                    self.dist_params["query_overdispersion"] * 3 - 1.5
+                )
+            )
             
             # Predict for the full data 
             logging.debug(
@@ -191,14 +200,6 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
     ) -> pd.Series:
 
         # Build base count distributions for true and false variants based on the MCMC results
-        self.dist_params = self.__get_distribution_params(sampling_results)
-
-        self.dist_params["query_overdispersion"] = query_coverage_estimate * (
-            10**(
-                self.dist_params["query_overdispersion"] * 3 - 1.5
-            )
-        )
-
         dist_query = pm.NegativeBinomial.dist(
             mu = query_coverage_estimate,
             alpha = self.dist_params["query_overdispersion"]
@@ -247,18 +248,11 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
     ) -> pd.Series:
         
         # Build base count distributions for query alleles based on the MCMC results
-        dist_params = self.__get_distribution_params(sampling_results)        
-        
+                
         # Get the CDF for each reference allele base count
-        overdispersion = query_coverage_estimate * (
-            10**(
-                dist_params["query_overdispersion"] * 3 - 1.5
-            )
-        )
-
         dist_query = pm.NegativeBinomial.dist(
             mu = query_coverage_estimate,
-            alpha = overdispersion
+            alpha = self.dist_params["query_overdispersion"]
         )
         query_cdf = np.exp(
             np.maximum(       
@@ -296,6 +290,15 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
             query_coverage_estimate,
             "alt_bc"
         )
+        print(
+            pd.concat(
+                [
+                    observed.alt_bc,
+                    alternate_cdf
+                ],
+                axis = 1
+            )
+        )
         # NOTE: May want to check only if <95%
         alt_evidence = (
             alternate_cdf.gt(self.__quantiles[0]) & \
@@ -304,7 +307,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
 
         # Exclude sites with an alt allele depth not originating from the
         # distribution of depths of coverage for the query strain 
-        ll_ratio[~alt_evidence] = 0.0
+        ll_ratio[~alt_evidence] = -1
 
         return ll_ratio
     
