@@ -62,7 +62,7 @@ class VCFFilter:
         min_depth: int = 0,
         min_alt_bc: int = 0,
         min_ref_bc: int = 0,
-        max_overdispersion: float = 0.1,
+        max_overdispersion: float = 0.7,
         downsampling: Union[int, float] = 1.0,
         chains: int = 5,
         draws: int = 10000,
@@ -163,7 +163,8 @@ reference sequences."
             power=power, 
             threads=threads, 
             engine=engine,
-            overdispersion_bias=overdispersion_bias
+            overdispersion_bias=overdispersion_bias,
+            max_overdispersion = max_overdispersion
         )
         
         # Fit and get the probabilities of the query having the alternate allele

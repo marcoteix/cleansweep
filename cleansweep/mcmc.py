@@ -19,6 +19,7 @@ class BaseCountFilter:
     threads: Union[int, None] = 5
     engine: str = "pymc"
     overdispersion_bias: int = 1
+    max_overdispersion: float = 0.7
 
     def __post_init__(self):
 
@@ -95,6 +96,13 @@ class BaseCountFilter:
                 alpha = self.overdispersion_bias, 
                 beta = self.overdispersion_bias, 
                 initval = 0.5
+            )
+
+            # Clip to max overdispersion
+            query_overdispersion = pm.math.clip(
+                query_overdispersion,
+                1 - self.max_overdispersion,
+                self.max_overdispersion
             )
             
             # Transform overdispersion
