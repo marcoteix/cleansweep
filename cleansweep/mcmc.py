@@ -235,7 +235,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
         )
 
         return pd.Series(
-            logp_alt + log_odds - logp_ref, 
+            logp_alt - logp_ref, 
             index = observed.index
         ) 
     
