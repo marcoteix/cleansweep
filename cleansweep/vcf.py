@@ -67,7 +67,22 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             comment="#", 
             header=None
         )  
-        self.vcf.columns = _VCF_HEADER[:self.vcf.shape[1]]
+
+        self.vcf.columns = [
+            x
+            for x in rc.stdout \
+                .decode("utf-8") \
+                .split("\n") 
+            if x.startswith("#")
+        ][-1].split("\t")
+
+        self.vcf.columns = [
+            (
+                x.removeprefix("#").lower()
+                if x.removeprefix("#").lower() in _VCF_HEADER
+                else x.removeprefix("#")
+            ) for x in self.vcf.columns
+        ]
 
         # Keep variants in the query
         if chrom:
