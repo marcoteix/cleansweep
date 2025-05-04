@@ -62,7 +62,7 @@ class VCFFilter:
         min_depth: int = 0,
         min_alt_bc: int = 0,
         min_ref_bc: int = 0,
-        max_overdispersion: float = 0.55,
+        max_overdispersion: float = 0.7,
         downsampling: Union[int, float] = 1.0,
         chains: int = 5,
         draws: int = 10000,
@@ -70,7 +70,7 @@ class VCFFilter:
         power: float = 0.975,
         threads: int = 5,
         engine: str = "pymc",
-        overdispersion_bias: int = 500
+        overdispersion_bias: int = 1
     ) -> pd.Series:   
     
         # Step 1: estimate the coverage of the background strain
@@ -150,7 +150,7 @@ with low alternate base counts, and {vcf.low_ref_bc.sum()} variants with low ref
         )
 
         logging.info( 
-            f"Filtered out {vcf.snp_filter.eq('PASS').sum()} variants also found in the \
+            f"Filtered out {vcf.snp_filter.ne('PASS').sum()} variants also found in the \
 reference sequences."
         )
 
@@ -163,7 +163,8 @@ reference sequences."
             power=power, 
             threads=threads, 
             engine=engine,
-            overdispersion_bias=overdispersion_bias
+            overdispersion_bias=overdispersion_bias,
+            max_overdispersion = max_overdispersion
         )
         
         # Fit and get the probabilities of the query having the alternate allele
@@ -189,7 +190,7 @@ reference sequences."
         
         return self.__add_filter_tag(
             vcf = vcf,
-            bias = 0.5
+            bias = 0
         )
 
     def save_samples(self, path: FilePath) -> None:

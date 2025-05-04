@@ -1,6 +1,7 @@
 from cleansweep.cli.filter import FilterCmd
 from cleansweep.cli.prepare import PrepareCmd
 from cleansweep.cli.inspect import InspectCmd
+from cleansweep.cli.collection import CollectionCmd
 from cleansweep.cli.commands import add_subcommand
 from cleansweep.__version__ import __version__
 import argparse
@@ -19,6 +20,7 @@ def main():
     filter_cmd = FilterCmd()
     prepare_cmd = PrepareCmd()
     inspect_cmd = InspectCmd()
+    collection_cmd = CollectionCmd()
 
     subparsers = parser.add_subparsers()
 
@@ -26,12 +28,14 @@ def main():
         [
             "filter",
             "prepare",
-            "inspect"
+            "inspect",
+            "collection"
         ],
         [
             filter_cmd,
             prepare_cmd,
-            inspect_cmd
+            inspect_cmd,
+            collection_cmd
         ]
     ):
         cmd_parser = add_subcommand(
@@ -51,6 +55,8 @@ def main():
         prepare_cmd.run(**kwargs)
     elif args.command == "inspect":
         inspect_cmd.run(**kwargs)
+    elif args.command == "collection":
+        collection_cmd.run(**kwargs)
 
 if __name__ == "__main__":
     main()

@@ -18,7 +18,8 @@ class BaseCountFilter:
     power: float = 0.95
     threads: Union[int, None] = 5
     engine: str = "pymc"
-    overdispersion_bias: int = 500
+    overdispersion_bias: int = 1
+    max_overdispersion: float = 0.7
 
     def __post_init__(self):
 
@@ -89,30 +90,30 @@ class BaseCountFilter:
             # distribution). Use a normal distribution as prior as using a 
             # Beta distribution leads to inf likelihood (although it should
             # not)
-            """
+            
             query_overdispersion = pm.Beta(
                 "query_overdispersion", 
                 alpha = self.overdispersion_bias, 
                 beta = self.overdispersion_bias, 
-                initval = 0.6
-            )
-            """
-            query_overdispersion = pm.Normal(
-                "query_overdispersion",
-                mu = 0.5,
-                sigma = self.overdispersion_bias
+                initval = 0.5
             )
 
+            # Clip to max overdispersion
             query_overdispersion = pm.math.clip(
                 query_overdispersion,
-                0.1, 0.9
+                1 - self.max_overdispersion,
+                self.max_overdispersion
             )
+            
+            # Transform overdispersion
+            query_overdispersion = query_overdispersion * 3 - 1.5
+            query_overdispersion = query_coverage_estimate * (10**query_overdispersion)
 
             # Model the depth of coverage at each position in the query
             # strain as a Negative Binomial distribution
             query = pm.NegativeBinomial.dist(
-                n = query_coverage_estimate, 
-                p = query_overdispersion
+                mu = query_coverage_estimate, 
+                alpha = query_overdispersion
             )
 
             # Model the background allele depth as a uniform distribution
@@ -158,7 +159,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                     cores=self.threads,
                     nuts_sampler=self.engine,
                     initvals = {
-                        "query_overdispersion": 0.6
+                        "query_overdispersion": 0.5
                     }
                 )
 
@@ -176,6 +177,15 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                 )
 
                 raise e
+
+            # Transform dispersion
+            self.dist_params = self.__get_distribution_params(self.sampling_results)
+
+            self.dist_params["query_overdispersion"] = query_coverage_estimate * (
+                10**(
+                    self.dist_params["query_overdispersion"] * 3 - 1.5
+                )
+            )
             
             # Predict for the full data 
             logging.debug(
@@ -188,59 +198,52 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                 query_coverage_estimate,
             )
             
-        return alt_p                     
-            
-    def get_conditional_posterior(
+        return alt_p 
+
+    def get_ll_ratio(
         self, 
         observed: pd.DataFrame, 
         sampling_results, 
-        query_coverage_estimate: float,
-        column: str = "alt_bc"
+        query_coverage_estimate: float
     ) -> pd.Series:
 
         # Build base count distributions for true and false variants based on the MCMC results
-        self.dist_params = self.__get_distribution_params(sampling_results)
-
         dist_query = pm.NegativeBinomial.dist(
-            n = query_coverage_estimate,
-            p = self.dist_params["query_overdispersion"]
-        )
-        query_logp = np.maximum(
+            mu = query_coverage_estimate,
+            alpha = self.dist_params["query_overdispersion"]
+        ) 
+
+        # Likelihood given alt allele depths
+        logp_alt = np.nan_to_num(
             pm.logp(
-                dist_query, 
-                observed[column].values
+                dist_query,
+                observed["alt_bc"].values
             ).eval(),
-            -1e6
+            nan = -100,
+            posinf = 0,
+            neginf = -100
         )
 
-        max_bc = np.maximum(
-            observed.alt_bc.max(),
-            observed.ref_bc.max()
-        )
-
-        dist_background = pm.Categorical.dist(
-            p = np.ones(max_bc)/max_bc,
-        )
-        background_logp = np.maximum(
+        # Likelihood given reference allele depths
+        logp_ref = np.nan_to_num(
             pm.logp(
-                dist_background, 
-                observed[column].values
+                dist_query,
+                observed["ref_bc"].values
             ).eval(),
-            -1e6
+            nan = -100,
+            posinf = 0,
+            neginf = -100
         )
 
-        prior = self.dist_params["alt_prob"]
-        if prior == "ref_bc":
-            prior = 1 - prior
-        
-        norm = (
-            np.exp(query_logp)*prior
-        ) + (
-            np.exp(background_logp)*(1-prior)
+        # Prior logodds
+        log_odds = np.log(
+            self.dist_params["alt_prob"] / (
+                1-self.dist_params["alt_prob"]+1e-10
+            )
         )
 
         return pd.Series(
-            np.exp(query_logp)*prior/norm, 
+            logp_alt - logp_ref, 
             index = observed.index
         ) 
     
@@ -253,12 +256,11 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
     ) -> pd.Series:
         
         # Build base count distributions for query alleles based on the MCMC results
-        dist_params = self.__get_distribution_params(sampling_results)        
-        
+                
         # Get the CDF for each reference allele base count
         dist_query = pm.NegativeBinomial.dist(
-            n = query_coverage_estimate,
-            p = dist_params["query_overdispersion"]
+            mu = query_coverage_estimate,
+            alpha = self.dist_params["query_overdispersion"]
         )
         query_cdf = np.exp(
             np.maximum(       
@@ -282,17 +284,11 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
         query_coverage_estimate: float,
     ) -> pd.Series:
 
-        prob = {
-            k: self.get_conditional_posterior(
-                observed,
-                sampling_results,
-                query_coverage_estimate,
-                column = k
-            ) for k in [
-                "ref_bc",
-                "alt_bc"
-            ]
-        }
+        ll_ratio = self.get_ll_ratio(
+            observed = observed,
+            sampling_results = sampling_results,
+            query_coverage_estimate = query_coverage_estimate
+        )
 
         # Check which sites originate from the distribution 
         # (p > left_quantile and p < right_quantile)
@@ -302,6 +298,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
             query_coverage_estimate,
             "alt_bc"
         )
+
         # NOTE: May want to check only if <95%
         alt_evidence = (
             alternate_cdf.gt(self.__quantiles[0]) & \
@@ -310,10 +307,10 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
 
         # Exclude sites with an alt allele depth not originating from the
         # distribution of depths of coverage for the query strain 
-        prob["alt_bc"][~alt_evidence] = 0.0
+        ll_ratio[~alt_evidence] = -1
 
-        return prob["alt_bc"]
-
+        return ll_ratio
+    
     def __get_distribution_params(
         self, 
         sampling_results
@@ -351,7 +348,7 @@ alleles in the query strain: {'; '.join([k+': '+str(v) for k,v in self.dist_para
 
     def filter(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
-        return vcf[self.prob.ge(0.5)]
+        return vcf[self.prob.ge(1)]
     
     def fit_filter(
         self, 

@@ -77,11 +77,10 @@ command \"{' '.join(cmd)}\". Got the following error: {rc.stdout}."
         overdispersion: float = .55
     ) -> int:
         
+        var = query_coverage * (10 ** (overdispersion * 3 - 1.5))
+        p = var/(var + query_coverage)
+        n = var
+        
         return int(
-            nbinom(
-                int(query_coverage),
-                overdispersion
-            ).ppf(
-                alpha
-            )
+            nbinom(n = n, p = p).ppf(alpha)
         )
