@@ -231,7 +231,8 @@ def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
 def format_vcf_header(
     header: str,
     chrom: Union[None, str] = None,
-    ref: Union[None, File, str] = None
+    ref: Union[None, File, str] = None,
+    add_filters: bool = True
 ) -> str:
     
     lines = []
@@ -254,16 +255,21 @@ def format_vcf_header(
 
     # Add descriptors for CleanSweep fields
     new_lines = [
-        f"##CleanSweepCommand=\"{' '.join(sys.argv)}\"",
-        "##FILTER=<ID=RefVar,Description=\"Variant also present in the references\">",
-        "##FILTER=<ID=FAIL,Description=\"Alternate allele depth does not match the overall depth of coverage\">",
-        "##FILTER=<ID=LowAltBC,Description=\"Alternate allele depth is too low\">",
-        "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
-        "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
-        "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
-        "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">"
-    ]
-    
+        f"##CleanSweepCommand=\"{' '.join(sys.argv)}\""
+    ] + (
+        [
+            "##FILTER=<ID=RefVar,Description=\"Variant also present in the references\">",
+            "##FILTER=<ID=FAIL,Description=\"Alternate allele depth does not match the overall depth of coverage\">",
+            "##FILTER=<ID=LowAltBC,Description=\"Alternate allele depth is too low\">",
+            "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
+            "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
+            "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
+            "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">"
+        ]
+        if add_filters
+        else []
+    )
+        
     if not chrom is None:
         new_lines.append(f"##CleanSweepChrom=\"{chrom}\"")
 
@@ -375,7 +381,8 @@ def write_merged_vcf(
     
     header = format_vcf_header(
         header,
-        chrom = None
+        chrom = None,
+        add_filters = False
     )
         
     # Subset the columns in the VCF spec and add fields to INFO 
