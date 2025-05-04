@@ -1,7 +1,6 @@
 import argparse
 from pathlib import Path
 from typing import Iterable, Union
-
 import joblib
 from cleansweep.cli.commands import Subcommand
 from cleansweep.vcf import write_vcf, VCF

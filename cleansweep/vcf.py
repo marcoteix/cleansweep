@@ -256,6 +256,8 @@ def format_vcf_header(
     new_lines = [
         f"##CleanSweepCommand=\"{' '.join(sys.argv)}\"",
         "##FILTER=<ID=RefVar,Description=\"Variant also present in the references\">",
+        "##FILTER=<ID=FAIL,Description=\"Alternate allele depth does not match the overall depth of coverage\">",
+        "##FILTER=<ID=LowAltBC,Description=\"Alternate allele depth is too low\">",
         "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
         "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
         "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
@@ -278,7 +280,7 @@ def write_vcf(
     vcf: pd.DataFrame,
     file: File,
     header: str,
-    chrom: str,
+    chrom: Union[None, str] = None,
 ):
     
     header = format_vcf_header(
@@ -350,6 +352,45 @@ def write_vcf(
         [
             "\t".join(x.astype(str)) 
             for x in fmt_vcf.values
+        ]
+    )
+
+    # Write VCF
+    with open(file, "w") as out:
+
+        out.write(
+            "\n".join(
+                [
+                    header,
+                    vcf_str
+                ]
+            )
+        )
+
+def write_merged_vcf(
+    vcf: pd.DataFrame,
+    file: File,
+    header: str,
+):
+    
+    header = format_vcf_header(
+        header,
+        chrom = None
+    )
+        
+    # Subset the columns in the VCF spec and add fields to INFO 
+    vcf = vcf.rename(
+        columns = {
+            k: k.upper()
+            for k in _VCF_HEADER
+        }
+    )
+
+    # Convert DataFrame to TSV
+    vcf_str = "\n".join(
+        [
+            "\t".join(x.astype(str)) 
+            for x in vcf.values
         ]
     )
 

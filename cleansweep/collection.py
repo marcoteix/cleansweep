@@ -1,5 +1,5 @@
 #%%
-import argparse
+import shutil
 import numpy as np
 import pandas as pd 
 from cleansweep.typing import File, Directory
@@ -8,9 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 import subprocess
-from cleansweep.vcf import VCF, _VCF_HEADER
+from cleansweep.vcf import VCF, _VCF_HEADER, write_merged_vcf
 from scipy.spatial.distance import pdist, squareform
-from scipy.stats import spearmanr
 
 @dataclass
 class Collection:
@@ -18,7 +17,7 @@ class Collection:
     vcfs: List[File]
     output: File
     tmp_dir: Directory
-    filters: Union[str, None] = None
+    min_ani: float = 0.995
 
     def __post_init__(self):
 
@@ -34,23 +33,54 @@ class Collection:
         self.tmp_dir = Path(self.tmp_dir)
         self.tmp_dir.mkdir(exist_ok=True)
 
-        # Type check filters
-        if not self.filters is None:
-            if not isinstance(
-                self.filters,
-                str
-            ):
-                raise ValueError(
-                    f"Filters must be a string, but got {type(self.filters)}."
-                )
+        # Check ANI
+        if not self.min_ani >= 0 and self.min_ani <= 1:
+            raise ValueError(
+                f"Minimum ANI must be between 0 and 1. Got {self.min_ani}."
+            )
+            
+    def merge(self):
+
+        gzvcfs = self.prepare_vcfs(
+            vcfs = self.vcfs,
+            output_directory = self.tmp_dir,
+            filters = "PASS,."
+        )
+
+        self.merge_vcfs(
+            vcfs = list(gzvcfs.values()),
+            output = self.tmp_dir.joinpath("merged.vcf")
+        )
+
+        self.add_sample_names_to_vcf(
+            vcf = self.tmp_dir.joinpath("merged.vcf"),
+            names = list(gzvcfs.keys()),
+            tmp_dir = self.tmp_dir,
+            output = self.tmp_dir.joinpath("merged.named.vcf")
+        )
+
+        vcf = self.merged_vcf_consensus_filter(
+            vcf = self.tmp_dir.joinpath("merged.named.vcf"),
+            min_ani = self.min_ani
+        )
+
+        write_merged_vcf(
+            vcf = vcf,
+            file = self.output,
+            header = VCF(
+                self.tmp_dir.joinpath("merged.named.vcf")
+            ).get_header()
+        )
+
+        #shutil.rmtree(self.tmp_dir)
     
     def prepare_vcfs(
         self,
         vcfs: List[File],
         output_directory: Directory,
-        filters: Union[str, None] = None,
-        include: str = "PASS,."
-    ):
+        include: Union[str, None] = None,
+        filters: str = "PASS,."
+    ) -> dict:
         
         output_directory = Path(output_directory)
         output_directory.mkdir(exist_ok=True)
@@ -75,11 +105,11 @@ class Collection:
                 "bcftools",
                 "view",
             ] + (
-                ["-f", filters]
-                if not filters is None
+                ["-i", include]
+                if not include is None
                 else []
             ) + [
-                "-i", include,
+                "-f", filters,
                 "-o", str(gzvcf),
                 "-O", "z",
                 "--write-index",
@@ -97,6 +127,8 @@ class Collection:
             )
 
             gzvcfs[filename] = gzvcf
+
+        return gzvcfs
 
     def merge_vcfs(
         self,
@@ -164,13 +196,19 @@ class Collection:
     def merged_vcf_consensus_filter(
         self,
         vcf: File,
-        min_snp_distance: int = 1000
+        min_ani: float = 0.995
     ) -> pd.DataFrame:
         
         # Read VCF
         vcf_df = VCF(vcf).read(
             chrom = None,
             add_base_counts = False
+        )
+
+        # Get genome length
+        genome_length = self.genome_lengths_from_vcf(
+            vcf,
+            vcf_df.chrom.unique()
         )
 
         # Subset genotype columns
@@ -191,27 +229,27 @@ class Collection:
         # Check Spearman correlation between the full and core SNP distances
         # for each sample. If they are not correlated, use the core SNPs
         for (
-            (full_sample_name, full_distances),
-            (core_sample_name, core_distances) 
+            (sample_name, full_distances),
+            (_, core_distances) 
         ) in zip(
             full_snp_matrix.iterrows(),
             core_snp_matrix.iterrows()
         ):
 
-            spearman = spearmanr(
-                full_distances,
-                core_distances
-            )
-
-            if (
-                #spearman.pvalue > 0.05 and \
-                full_distances.mean() > min_snp_distance
+            if self.use_core(
+                full_distances.drop(sample_name),
+                genome_length,
+                min_ani
             ):
+                
+                logging.warning(
+                    f"Estimated ANI for {sample_name} is lower than {min_ani}. Removing non-core SNPs."
+                )
                                 
                 # Replace genotype with core
                 genotype = genotype.assign(
                     **{
-                        full_sample_name: genotype[full_sample_name] \
+                        sample_name: genotype[sample_name] \
                             .where(
                                 is_core,
                                 genotype.mode(axis=1)[0]
@@ -219,7 +257,52 @@ class Collection:
                     }
                 )
 
-        return genotype
+        vcf_df = genotype.join(
+                vcf_df[
+                    vcf_df.columns.intersection(_VCF_HEADER)
+                ].set_index(
+                    ["chrom", "pos"]
+                )
+            ).reset_index()[vcf_df.columns]
+        
+        vcf_df = vcf_df.assign(
+            pos = vcf_df.pos.astype("Int64")
+        )
+
+        return vcf_df
+    
+    def use_core(
+        self,
+        full_distances: pd.Series,
+        genome_length: int,
+        min_ani: float = 0.995
+    ) -> bool:
+        
+        # Estimate ANI
+        ani = 1 - (
+            full_distances.mean()/genome_length
+        )
+
+        return ani < min_ani
+    
+    def genome_lengths_from_vcf(
+        self,
+        vcf: File,
+        chroms: List[str]
+    ) -> int:
+        
+        with open(vcf) as file:
+            content = file.read()
+
+        return sum(
+            [
+                int(
+                    content.split(
+                        f"##contig=<ID={chrom},length="
+                    )[-1].split(">")[0]
+                ) for chrom in chroms
+            ]
+        )
 
     def snp_distance(
         self,
