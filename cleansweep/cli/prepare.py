@@ -39,7 +39,7 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
 
         nucmer_grp = parser.add_argument_group("Alignment options")
         nucmer_grp.add_argument("--min-identity", "-mi", type=float, help="Masks alignments with at least this \
-identity. Must be between 0 and 1. Default is %(default)f.", default=0.8)
+identity. Must be between 0 and 1. Default is %(default)f.", default=0.95)
         nucmer_grp.add_argument("--min-length", "-ml", type=int, help="Masks alignments of at least this length. \
 Default is %(default)d.", default=150)
         

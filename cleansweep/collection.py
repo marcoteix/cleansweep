@@ -72,7 +72,7 @@ class Collection:
             ).get_header()
         )
 
-        #shutil.rmtree(self.tmp_dir)
+        shutil.rmtree(self.tmp_dir)
     
     def prepare_vcfs(
         self,
