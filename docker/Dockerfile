@@ -35,6 +35,6 @@ RUN python3 -m pip install flit;
 RUN micromamba install -y setuptools
 
 # Install CleanSweep
-RUN cd tmp/cleansweep && flit install -s cleansweep
+RUN cd /tmp/cleansweep && flit install -s cleansweep
 
 RUN cleansweep --help
