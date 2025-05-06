@@ -111,8 +111,14 @@ class NucmerAlignment:
             for record, files in file_map.items():
 
                 coords = self.read_coords(files["coords"])
+
                 with open(output_fasta, "a") as output_file:
-                    self.mask(coords, files["fasta"], record, output_file)
+                    self.mask(
+                        coords, 
+                        files["fasta"], 
+                        record, 
+                        output_file
+                    )
 
             # Get a list of unaligned regions in the reference
             self.gaps = self.get_gaps(
@@ -128,7 +134,7 @@ class NucmerAlignment:
             # Get the start and end positions for each contig in the reference
             with open(reference) as input_file:
                 self.gaps = [
-                    [1, len(x)]
+                    [1, len(x), x.id]
                     for x in SeqIO.parse(input_file, "fasta")
                 ]
 
@@ -141,7 +147,8 @@ class NucmerAlignment:
             self.gaps,
             columns = [
                 "start",
-                "end"
+                "end",
+                "chrom"
             ]
         ).set_index("start")
 
@@ -212,7 +219,7 @@ class NucmerAlignment:
             reference,
             query,
             "-p",
-            output.removesuffix(".delta")
+            str(output).removesuffix(".delta")
         ]
 
         rc = subprocess.run(command)
@@ -254,7 +261,7 @@ class NucmerAlignment:
         self, 
         coords: pd.DataFrame,
         invert: bool = False
-    ) -> List[Tuple[int, int]]:
+    ) -> List[Tuple[int, int, str]]:
         """
         Marks regions in the query which align to the reference, or vice-versa (if invert is `True`).
         """
@@ -289,32 +296,63 @@ class NucmerAlignment:
         )
 
         # Sort alignment starts
-        starts = pass_coords[f"f_{subject}_start"].sort_values().values
+        starts = pass_coords \
+            .sort_values(
+                [subject, f"f_{subject}_start"]
+            )[f"f_{subject}_start"] \
+            .values
+        
         # Sort alignment ends
-        ends = pass_coords[f"f_{subject}_end"].sort_values().values
+        ends = pass_coords. \
+            sort_values(
+                [subject, f"f_{subject}_end"]
+            )[f"f_{subject}_end"] \
+            .values
+        
+        chroms = pass_coords. \
+            sort_values(
+                [subject, f"f_{subject}_end"]
+            )[subject] \
+            .values
 
         # Iterate over start and ends. Track how many alignments are open
         # (open at a start; close after an end). Mask bp where this counter
         # is > 0
         counter, start_n, end_n = 0, 0, 0
         mask_starts, mask_ends = [], []
+        chrom_starts, chrom_ends = [], []
 
         while start_n < len(starts) and end_n < len(ends):
 
             if starts[start_n] < ends[end_n]: 
-                if counter == 0: mask_starts.append(starts[start_n])
+                if counter == 0: 
+                    mask_starts.append(starts[start_n])
+                    chrom_starts.append(chroms[start_n])
                 counter += 1
                 start_n += 1
             else:
                 counter -= 1
-                if counter == 0: mask_ends.append(ends[end_n])
+                if counter == 0: 
+                    mask_ends.append(ends[end_n])
+                    chrom_ends.append(chroms[end_n])
                 end_n += 1
 
             if counter < 0:
                 raise RuntimeError(f"Something went wrong! Counter is {counter} (< 0). \
 start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}.")
 
-        return [(a, b) for a,b in zip([1]+mask_ends, mask_starts+[-1])]
+        return [
+            (a, b, c) 
+            for a,b,c in zip(
+                [1]+mask_ends, 
+                mask_starts+[-1],
+                (
+                    [chrom_ends[0]]
+                    if len(chrom_ends)
+                    else []
+                ) + chrom_ends
+            )
+        ]
             
     def mask(
         self, 
@@ -329,18 +367,37 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
         for record in SeqIO.parse(fasta, "fasta"):
 
             if record.id == query_id:
+                
                 masked_record = record 
 
-                masked_record.seq = self.mask_string(str(record.seq), self.masks)
-                SeqIO.write(masked_record, output, "fasta")
-                break
+                masked_record.seq = self.mask_string(
+                    str(record.seq), 
+                    [
+                        x
+                        for x in self.masks
+                        if x[2] == record.id
+                    ]
+                )
 
-            raise RuntimeError(f"Found no record in the FASTA file with ID {query_id}.")
+                SeqIO.write(
+                    masked_record, 
+                    output, 
+                    "fasta"
+                )
 
-    def mask_string(self, s: str, masks: List[Tuple[int, int]]) -> str:
+                return None
+
+        raise RuntimeError(f"Found no record in the FASTA file with ID {query_id}.")
+
+    def mask_string(
+        self, 
+        s: str, 
+        masks: List[Tuple[int, int, str]]
+    ) -> str:
 
         masked_s = []
-        for start, end in masks:
+
+        for start, end, _ in masks:
             masked_s.append(
                 s[start:end] if end > -1 else s[start:]
             )
@@ -381,7 +438,7 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
     def get_gaps(
         self,
         coords: List[File]
-    ) -> List[Tuple[int, int]]:
+    ) -> List[Tuple[int, int, str]]:
         
         # Concatenate the coords files from all queries
         coord = pd.concat(

@@ -1,8 +1,8 @@
 #%%
 from dataclasses import dataclass
-from typing import List, Union, Iterable
+from typing import List, Union
 import numpy as np
-from cleansweep.coverage import CoverageFilter, CoverageEstimator
+from cleansweep.coverage import CoverageEstimator
 from cleansweep.io import FilePath
 from cleansweep.mcmc import BaseCountFilter
 from cleansweep.typing import File, Directory
@@ -31,11 +31,17 @@ class NucmerSNPFilter:
             f"Found {len(nucmer_snps)} SNPs among reference sequences."
         )
 
+        nucmer_snps = nucmer_snps.assign(
+            tag = nucmer_snps.ref_id + "_" + nucmer_snps.pos.astype(str)
+        )
+
+
         # Fail SNPs in the input VCF also present in the set of nucmer SNPs
         return vcf.assign(
-            snp_filter = vcf.pos \
-                .isin(
-                    nucmer_snps.pos
+            snp_filter = (
+                    vcf.chrom + "_" + vcf.pos.astype(str)
+                ).isin(
+                    nucmer_snps.tag
                 ).replace(
                     {
                         True: "FAIL",
@@ -52,7 +58,7 @@ class VCFFilter:
 
     def fit(
         self, 
-        query: str,
+        query: List[str],
         vcf: File, 
         gaps: pd.DataFrame,
         nucmer_snps: pd.DataFrame,
@@ -71,11 +77,11 @@ class VCFFilter:
         threads: int = 5,
         engine: str = "pymc",
         overdispersion_bias: int = 1
-    ) -> pd.Series:   
+    ) -> pd.DataFrame:   
     
         # Step 1: estimate the coverage of the background strain
 
-        logging.info(f"Estimating the mean depth of coverage for {query}...")
+        logging.info(f"Estimating the mean depth of coverage for {', '.join(query)}...")
 
         self.coverage_estimator = CoverageEstimator(
             random_state = self.random_state
@@ -110,7 +116,8 @@ class VCFFilter:
             .joinpath(
                 "cleansweep.augmented.vcf"
             )
-        vcf = augment.augment(
+        
+        vcf_df = augment.augment(
             vcf = vcf,
             query = query,
             min_alt_bc = augment_min_alt_bc,
@@ -130,48 +137,48 @@ class VCFFilter:
             "Finding low coverage variants and those with low alt and ref base counts"
         )
 
-        vcf = vcf.assign(
-            low_cov = vcf.depth.lt(min_depth),
-            low_alt_bc = vcf.alt_bc.lt(min_alt_bc),
-            low_ref_bc = vcf.ref_bc.lt(min_ref_bc)
+        vcf_df = vcf_df.assign(
+            low_cov = vcf_df.depth.lt(min_depth),
+            low_alt_bc = vcf_df.alt_bc.lt(min_alt_bc),
+            low_ref_bc = vcf_df.ref_bc.lt(min_ref_bc)
         )
 
         logging.info(
-            f"Found {vcf.low_cov.sum()} low coverage variants, {vcf.low_alt_bc.sum()} variants \
-with low alternate base counts, and {vcf.low_ref_bc.sum()} variants with low reference base counts."
+            f"Found {vcf_df.low_cov.sum()} low coverage variants, {vcf_df.low_alt_bc.sum()} variants \
+with low alternate base counts, and {vcf_df.low_ref_bc.sum()} variants with low reference base counts."
         )
 
         # Step 4: exclude SNPs between the reference sequences (from nucmer alignments)
 
         self.nucmer_filter = NucmerSNPFilter()
-        vcf = self.nucmer_filter.filter(
-            vcf = vcf,
+        vcf_df = self.nucmer_filter.filter(
+            vcf = vcf_df,
             nucmer_snps = nucmer_snps
         )
 
         logging.info( 
-            f"Filtered out {vcf.snp_filter.ne('PASS').sum()} variants also found in the \
+            f"Filtered out {vcf_df.snp_filter.ne('PASS').sum()} variants also found in the \
 reference sequences."
         )
 
         # Step 5: filter SNPs based on allele depths
         
         self.basecount_filter = BaseCountFilter(
-            chains=chains, 
-            draws=draws, 
-            burn_in=burn_in,
-            power=power, 
-            threads=threads, 
-            engine=engine,
-            overdispersion_bias=overdispersion_bias,
+            chains = chains, 
+            draws = draws, 
+            burn_in = burn_in,
+            power = power, 
+            threads = threads, 
+            engine = engine,
+            overdispersion_bias = overdispersion_bias,
             max_overdispersion = max_overdispersion
         )
         
         # Fit and get the probabilities of the query having the alternate allele
-        mcmc_vcf = vcf[
-            ~vcf.low_ref_bc & \
-            ~vcf.low_cov & \
-            vcf.snp_filter.eq("PASS") 
+        mcmc_vcf = vcf_df[
+            ~vcf_df.low_ref_bc & \
+            ~vcf_df.low_cov & \
+            vcf_df.snp_filter.eq("PASS") 
         ]
 
         p_alt = self.basecount_filter.fit(
@@ -181,7 +188,7 @@ reference sequences."
         )
 
         # Join the probabilities with the full VCF DataFrame
-        vcf = vcf.drop(
+        vcf_df = vcf_df.drop(
             columns = "p_alt",
             errors = "ignore"
             ).join(
@@ -189,7 +196,7 @@ reference sequences."
             )
         
         return self.__add_filter_tag(
-            vcf = vcf,
+            vcf = vcf_df,
             bias = 0
         )
 

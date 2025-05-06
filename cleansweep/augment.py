@@ -1,5 +1,6 @@
 import subprocess 
 from dataclasses import dataclass
+from typing import List
 from cleansweep.typing import File
 from cleansweep.vcf import VCF
 from scipy.stats import nbinom
@@ -12,7 +13,7 @@ class AugmentVariantCalls:
     def augment(
         self,
         vcf: File,
-        query: str,
+        query: List[str],
         min_alt_bc: int,
         output: File
     ) -> pd.DataFrame:
@@ -29,7 +30,7 @@ class AugmentVariantCalls:
             "-i",
             filter_expression,
             "-r",
-            str(query),
+            ",".join(query),
             str(vcf)
         ]
 

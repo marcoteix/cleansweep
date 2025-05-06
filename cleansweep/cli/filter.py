@@ -129,7 +129,7 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         vcf_out = vcf_filter.fit(
             vcf = input, 
             gaps = prepare_dict["gaps"],
-            query = prepare_dict["chrom"][0],
+            query = prepare_dict["chrom"],
             nucmer_snps = prepare_dict["snps"],
             tmp_dir = tmp_dir,
             n_coverage_sites = n_coverage_sites,
@@ -155,7 +155,7 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
             vcf = vcf_out,
             file = outdir.joinpath("cleansweep.variants.vcf"),
             header = VCF(str(input)).get_header(),
-            chrom = prepare_dict['chrom'][0],
+            chrom = prepare_dict['chrom'],
         )
 
         # Save the filter and MCMC results

@@ -5,9 +5,10 @@ from pathlib import Path
 # Path to test files
 references_dir = Path("tests/data/references")
 background_fastas = list( 
-    references_dir.glob("*background.*.fa")
+    references_dir.glob("complete/background.*.fa")
 )
 reference_fasta = references_dir.joinpath(
+    "complete",
     "query.Esch_coli_TUM2802.fa"
 )
 
@@ -82,6 +83,44 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             str(
                 outdir.joinpath(
                     "test_all_fastas"
+                )
+            ),
+            "-V", "4",
+            "-mi", "0.95",
+            "-k"
+        ]
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+
+    def test_incomplete_references(self):
+
+        background_fastas_fragmented = list( 
+            references_dir.glob("fragmented/background.*.fa")
+        )
+        reference_fasta_fragmented = references_dir.joinpath(
+            "fragmented",
+            "query.Esch_coli_TUM2802.fragmented.fa"
+        )
+        
+        cmd = [
+            "cleansweep",
+            "prepare",
+            str(reference_fasta_fragmented),
+            "--background"
+        ] + [ 
+            str(x)
+            for x in background_fastas_fragmented
+        ] + [
+            "-o",
+            str(
+                outdir.joinpath(
+                    "test_incomplete_references"
                 )
             ),
             "-V", "4",

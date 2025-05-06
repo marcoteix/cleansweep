@@ -149,6 +149,37 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             rc.returncode,
             0
         )
+
+    def test_fragmented_references(self):
+
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "test.vcf.gz"
+                )
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_incomplete_references",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_fragmented_references"
+                )
+            )
+        ] + opts
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )        
         
 if __name__ == '__main__':
     unittest.main()

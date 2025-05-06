@@ -3,7 +3,7 @@ from functools import partial
 import sys
 import pandas as pd
 import subprocess
-from typing import Union, Collection
+from typing import Any, Union, Collection, List
 import numpy as np 
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,10 +26,10 @@ class VCF:
 
     def read(
         self, 
-        chrom: Union[str, None], 
-        filters: Union[Collection[str], None] = None, 
-        include: Union[str, None]=None,
-        exclude: Union[str, None]=None,
+        chrom: Union[str, None, List[str]], 
+        filters: Union[List[str], None] = None, 
+        include: Union[List[str], None]=None,
+        exclude: Union[List[str], None]=None,
         add_base_counts: bool = True
     ) -> pd.DataFrame:
         """Filters a VCF file (compressed or uncompressed) with bcftools. Requires bcftools.
@@ -46,7 +46,13 @@ None, no filters are applied. Defaults to None.
         filters_cmd = ["-f"] + list(filters) if filters is not None else []
         include_cmd = ["-i"] + list(include) if include is not None else []
         exclude_cmd = ["-e"] + list(exclude) if exclude is not None else []
-        command = ["bcftools", "view"] + filters_cmd + include_cmd + exclude_cmd + ["-O", "v", self.file]
+        command = [
+            "bcftools", 
+            "view"
+        ] + filters_cmd + include_cmd + exclude_cmd + [
+            "-O", "v", 
+            str(self.file)
+        ]
 
         # Run command
         logging.info(f"Running \"{' '.join(command)}\"...")
@@ -86,7 +92,10 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
 
         # Keep variants in the query
         if chrom:
-            self.vcf = self.vcf[self.vcf.chrom.eq(chrom)]
+            if isinstance(chrom, str):
+                self.vcf = self.vcf[self.vcf.chrom.eq(chrom)]
+            else:
+                self.vcf = self.vcf[self.vcf.chrom.isin(chrom)]
 
         self.vcf = self.exclude_indels(self.vcf)
         if add_base_counts:
@@ -173,8 +182,11 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             vcf = vcf.assign(p_alt = vcf["info"] \
                 .apply(
                     lambda x: (
-                        10**(-get_info_value(x, tag="CSP", dtype=int))
-                        if "CSP=" in x 
+                        10**(
+                            -int(
+                                get_info_value(x, tag="CSP", dtype=int)
+                            )
+                        ) if "CSP=" in x 
                         else pd.NA
                     )
                 )
@@ -225,12 +237,24 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         # Find the maximum base count (alt allele)
         return bases[np.argmax(bc)]
         
-def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
-    return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None
+def get_info_value(
+        s: str, 
+        tag: str, 
+        delim: str = ";", 
+        dtype: Any = float
+    ) -> Any:
+    
+    return (
+        dtype(
+            s.split(tag+"=")[-1].split(delim)[0]
+        ) 
+        if tag in s 
+        else None
+    )
 
 def format_vcf_header(
     header: str,
-    chrom: Union[None, str] = None,
+    chrom: Union[None, List[str]] = None,
     ref: Union[None, File, str] = None,
     add_filters: bool = True
 ) -> str:
@@ -271,7 +295,8 @@ def format_vcf_header(
     )
         
     if not chrom is None:
-        new_lines.append(f"##CleanSweepChrom=\"{chrom}\"")
+        for c in chrom:
+            new_lines.append(f"##CleanSweepChrom=\"{c}\"")
 
     if not ref is None:
         new_lines.append(
@@ -286,7 +311,7 @@ def write_vcf(
     vcf: pd.DataFrame,
     file: File,
     header: str,
-    chrom: Union[None, str] = None,
+    chrom: Union[None, List[str]] = None,
 ):
     
     header = format_vcf_header(
