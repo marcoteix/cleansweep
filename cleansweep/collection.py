@@ -44,7 +44,7 @@ class Collection:
         gzvcfs = self.prepare_vcfs(
             vcfs = self.vcfs,
             output_directory = self.tmp_dir,
-            filters = "PASS,."
+            filters = "PASS,.,RefVar,FAIL,LowAltBC"
         )
 
         self.merge_vcfs(
@@ -142,7 +142,7 @@ class Collection:
             "-o", str(output),
             "-O", "z",
             "--force-samples",
-            "--missing-to-ref"
+            #"--missing-to-ref"
         ] + [
             str(x)
             for x in vcfs

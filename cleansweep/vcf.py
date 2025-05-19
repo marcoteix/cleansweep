@@ -3,7 +3,7 @@ from functools import partial
 import sys
 import pandas as pd
 import subprocess
-from typing import Union, Collection
+from typing import List, Union, Collection
 import numpy as np 
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +26,7 @@ class VCF:
 
     def read(
         self, 
-        chrom: Union[str, None], 
+        chrom: Union[str, None, List], 
         filters: Union[Collection[str], None] = None, 
         include: Union[str, None]=None,
         exclude: Union[str, None]=None,
@@ -86,7 +86,8 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
 
         # Keep variants in the query
         if chrom:
-            self.vcf = self.vcf[self.vcf.chrom.eq(chrom)]
+            if isinstance(chrom, str): chrom = [chrom]
+            self.vcf = self.vcf[self.vcf.chrom.isin(chrom)]
 
         self.vcf = self.exclude_indels(self.vcf)
         if add_base_counts:
@@ -230,7 +231,7 @@ def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
 
 def format_vcf_header(
     header: str,
-    chrom: Union[None, str] = None,
+    chrom: Union[None, str, List] = None,
     ref: Union[None, File, str] = None,
     add_filters: bool = True
 ) -> str:
@@ -271,7 +272,9 @@ def format_vcf_header(
     )
         
     if not chrom is None:
-        new_lines.append(f"##CleanSweepChrom=\"{chrom}\"")
+
+        if isinstance(chrom, str): chrom = [chrom]
+        new_lines.append(f"##CleanSweepChrom=\"{','.join(chrom)}\"")
 
     if not ref is None:
         new_lines.append(
@@ -286,13 +289,18 @@ def write_vcf(
     vcf: pd.DataFrame,
     file: File,
     header: str,
-    chrom: Union[None, str] = None,
+    chrom: Union[None, str, List] = None,
 ):
     
     header = format_vcf_header(
         header,
         chrom = chrom
     )
+
+    if not "cleansweep_filter" in vcf.columns:
+        vcf = vcf.assign(
+            cleansweep_filter = pd.NA
+        )
         
     # Subset the columns in the VCF spec and add fields to INFO 
     fmt_vcf = vcf[
@@ -305,7 +313,10 @@ def write_vcf(
     ).drop(
         columns = "FILTER"
     ).assign(
-        FILTER = vcf.cleansweep_filter if "cleansweep_filter" in vcf else ".",
+        FILTER = vcf["filter"].where(
+                vcf.cleansweep_filter.isna(),
+                vcf.cleansweep_filter
+            ),
         SAMPLE = (
             vcf.cleansweep_filter \
                 .eq("PASS") \
@@ -372,6 +383,67 @@ def write_vcf(
                 ]
             )
         )
+
+def write_full_vcf(
+    vcf: pd.DataFrame,
+    full_vcf: File,
+    file: File,
+    header: str,
+    *,
+    chrom: Union[None, str] = None,
+    min_dp: int = 0
+):
+    
+    # Read full VCF
+    full = VCF(full_vcf).read(
+        chrom = chrom,
+        add_base_counts = False
+    )
+
+    # Get the sample name
+    sample_name = full.columns.to_list()[-1]
+
+    # Fail sites with depth < min DP
+    full = full.assign(
+        filter = full["filter"].where(
+            full["info"].apply(
+                lambda x: get_info_value(x, "DP", dtype=int)
+            ).ge(min_dp),
+            "LowCov"
+        )
+    )
+    # Pass ambiguous sites not evaluated by CleanSweep
+    full.loc[
+        full["filter"].str.contains("Amb"),
+        "filter"
+    ] = "PASS"
+
+    # Set genotype info in sites not evaluated to ref
+    full = full.assign(
+        **{sample_name: "0"}
+    )
+
+    # Exclude positions in the VCF to write
+    in_out_vcf = (
+        full.chrom + "_" + full.pos.astype(str)
+    ).isin(
+        vcf.chrom + "_" + vcf.pos.astype(str)
+    )
+
+    vcf = pd.concat(
+        [
+            full[~in_out_vcf],
+            vcf
+        ]
+    ).sort_values(["chrom", "pos"])
+
+    # Write to output
+    write_vcf(
+        vcf = vcf,
+        file = file,
+        header = header,
+        chrom = chrom
+    )
 
 def write_merged_vcf(
     vcf: pd.DataFrame,

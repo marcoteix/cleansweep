@@ -1,13 +1,12 @@
 #%%
 from dataclasses import dataclass
-from typing import List, Union, Iterable
+from typing import Union
 import numpy as np
-from cleansweep.coverage import CoverageFilter, CoverageEstimator
+from cleansweep.coverage import CoverageEstimator
 from cleansweep.io import FilePath
 from cleansweep.mcmc import BaseCountFilter
 from cleansweep.typing import File, Directory
 from cleansweep.augment import AugmentVariantCalls
-from cleansweep.nucmer import NUCMER_SNPS_HEADER
 from pathlib import Path
 import pandas as pd
 import joblib

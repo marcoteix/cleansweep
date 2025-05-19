@@ -149,6 +149,68 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             rc.returncode,
             0
         )
+
+    def test_variants_option(self):
+
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "test.vcf.gz"
+                )
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_variants_option"
+                )
+            ),
+            "--variants"
+        ] + opts
+
+        rc = subprocess.run(cmd)
         
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+
+    def test_incomplete_reference(self):
+
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath("test.vcf.gz")
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_incomplete_references",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_incomplete_references"
+                )
+            ),
+            "--variants"
+        ] + opts
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+
 if __name__ == '__main__':
     unittest.main()

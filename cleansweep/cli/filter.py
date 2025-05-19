@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Iterable, Union
 import joblib
 from cleansweep.cli.commands import Subcommand
-from cleansweep.vcf import write_vcf, VCF
+from cleansweep.vcf import write_vcf, write_full_vcf, VCF
 from cleansweep.filter import VCFFilter
 from cleansweep.typing import File, Directory
 from cleansweep.__version__ import __version__
@@ -27,6 +27,8 @@ class FilterCmd(Subcommand):
         io_grp.add_argument("prepare", type=str, help="Output .swp file from CleanSweep prepare \
 (cleansweep.prepare.swp).")
         io_grp.add_argument("output", type=str, help="Output directory.")
+        io_grp.add_argument("--variants", action="store_true", help="If set, only writes sites evaluated by \
+CleanSweep, ignoring sites with no evidence of an alternate allele. Writes all sites by default.")
         io_grp.add_argument("--verbosity", "-V", type=int, choices = [0, 1, 2, 3, 4], help = "Logging verbosity. \
 Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
 
@@ -94,6 +96,7 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         verbosity: int,
         output: Directory,
         overdispersion_bias: int,
+        variants: bool,
         **kwargs
     ):
         
@@ -148,16 +151,26 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
 
         # Write the output VCF
         logging.debug(
-            f"Writing filtered VCF to {str(outdir.joinpath("cleansweep.variants.vcf"))}..."
+            f'Writing filtered VCF to {str(outdir.joinpath("cleansweep.variants.vcf"))}...'
         )
         
-        write_vcf(
-            vcf = vcf_out,
-            file = outdir.joinpath("cleansweep.variants.vcf"),
-            header = VCF(str(input)).get_header(),
-            chrom = prepare_dict['chrom'][0],
-        )
-
+        if variants:
+            write_vcf(
+                vcf = vcf_out,
+                file = outdir.joinpath("cleansweep.variants.vcf"),
+                header = VCF(str(input)).get_header(),
+                chrom = prepare_dict['chrom'],
+            )
+        else:
+            write_full_vcf(
+                vcf = vcf_out,
+                full_vcf = input,
+                file = outdir.joinpath("cleansweep.variants.vcf"),
+                header = VCF(str(input)).get_header(),
+                chrom = prepare_dict['chrom'],
+                min_dp = min_depth
+            )
+             
         # Save the filter and MCMC results
         vcf_filter.save(outdir.joinpath("cleansweep.filter.swp"))
         vcf_filter.save_samples(outdir.joinpath("cleansweep.posterior.swp"))

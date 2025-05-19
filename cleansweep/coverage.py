@@ -1,4 +1,5 @@
 from functools import partial
+import random
 from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
 from sklearn.mixture import BayesianGaussianMixture as DPGMM
 from sklearn.preprocessing import StandardScaler
@@ -298,6 +299,11 @@ class CoverageEstimator:
         # Pick n_lines at random from the VCF file
         view_cmd = ["bcftools", "view", "-H", str(vcf), "-r", region]
         shuf_cmd = ["shuf", "-n", str(n_lines)]
+        shuf_cmd = [
+            "python",
+            "-c",
+            f"\'import random, sys; file=sys.stdin.readlines(); random.shuffle(file); print(*file[:{n_lines}], sep='\n')\'"
+        ]
 
         logging.debug(
             f"Downsampling {str(vcf)} with the command \"{' '.join(view_cmd)} | \
@@ -307,8 +313,23 @@ class CoverageEstimator:
         view = subprocess.Popen(
             view_cmd,
             stdout = subprocess.PIPE,
-            stderr = subprocess.PIPE
+            stderr = subprocess.PIPE,
+            text = True
         )
+
+        view_out, view_errors = view.communicate()
+
+        if view_errors:
+            raise RuntimeError(
+                f"Reading {str(vcf)} failed. Command: {' '.join(view_cmd)}. Reason: {view_errors.decode("utf-8")}."
+            )
+        
+        lines = view_out.splitlines()
+        random.shuffle(lines)
+
+        lines = lines[:n_lines]
+
+        """
         shuf = subprocess.check_output(
             shuf_cmd,
             stdin = view.stdout
@@ -319,6 +340,15 @@ class CoverageEstimator:
             io.StringIO(
                 shuf.decode("utf-8")
             ), 
+            comment="#", 
+            sep="\t", 
+            header=None
+        )
+
+        """
+        # Read output as a DataFrame
+        return pd.read_table(
+            io.StringIO("\n".join(lines)), 
             comment="#", 
             sep="\t", 
             header=None

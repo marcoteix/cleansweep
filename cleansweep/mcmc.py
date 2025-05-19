@@ -7,6 +7,13 @@ from dataclasses import dataclass
 import pandas as pd
 import pytensor.tensor as pt
 import logging
+import pytensor
+import platform
+
+# Fix compiler stuff for pymc
+if platform.system() == "Darwin":
+    pytensor.config.cxx = '/usr/bin/clang++'
+
 
 @dataclass
 class BaseCountFilter:

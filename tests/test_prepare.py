@@ -4,10 +4,20 @@ from pathlib import Path
 
 # Path to test files
 references_dir = Path("tests/data/references")
+
+incomplete_background_fastas = list( 
+    references_dir.glob("incomplete/background..incomplete.fa")
+)
+incomplete_reference_fasta = references_dir.joinpath(
+    "incomplete",
+    "query.Esch_coli_TUM2802.incomplete.fa"
+)
+
 background_fastas = list( 
-    references_dir.glob("*background.*.fa")
+    references_dir.glob("complete/background.*.fa")
 )
 reference_fasta = references_dir.joinpath(
+    "complete",
     "query.Esch_coli_TUM2802.fa"
 )
 
@@ -97,6 +107,33 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             0
         )
 
+    def test_incomplete_references(self):
+
+        cmd = [
+            "cleansweep",
+            "prepare",
+            str(incomplete_reference_fasta),
+            "--background"
+        ] + [ 
+            str(x)
+            for x in incomplete_background_fastas
+        ] + [
+            "-o",
+            str(
+                outdir.joinpath("test_incomplete_references")
+            ),
+            "-V", "4",
+            "-mi", "0.95",
+            "-k"
+        ]
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
 
 if __name__ == '__main__':
     unittest.main()
