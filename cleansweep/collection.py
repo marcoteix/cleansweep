@@ -252,7 +252,15 @@ class Collection:
                         sample_name: genotype[sample_name] \
                             .where(
                                 is_core,
-                                genotype.mode(axis=1)[0]
+                                genotype \
+                                    .astype(str) \
+                                    .replace(".", pd.NA) \
+                                    .mode(
+                                        axis = 1,
+                                        dropna = True
+                                    )[0] \
+                                    .astype(str) \
+                                    .fillna(".")
                             )
                     }
                 )
@@ -310,7 +318,17 @@ class Collection:
         sample2: pd.Series
     ) -> int:
 
-        return int((sample1 != sample2).sum())
+        return int(
+            (
+                np.logical_and(
+                    np.logical_and(
+                        sample1 != sample2,
+                        sample1 != "."
+                    ),
+                    sample2 != "."
+                )
+            ).sum()
+        )
 
     def snp_matrix(
         self,
@@ -336,10 +354,24 @@ class Collection:
     ) -> Tuple[pd.DataFrame, pd.Series]:
 
         # Number of occurrences across all samples
-        n_samples = genotype.sum(axis=1)
+        n_samples = genotype.sum(
+            axis = 1,
+            numeric_only = True
+        )
 
-        core = n_samples.gt(1) & n_samples.lt(genotype.shape[1]-1)
+        # Number of samples with genotype information
+        n_pass = genotype.ne(".").sum(axis=1)
 
+        core = (
+            n_pass.eq(1) | \
+            n_samples.eq(n_pass) | \
+            n_samples.eq(0) | \
+            (
+                n_samples.gt(1) & \
+                n_samples.lt(n_pass-1)
+            )
+        )
+        
         return genotype[core], core
 
     def __raise_run_error(
