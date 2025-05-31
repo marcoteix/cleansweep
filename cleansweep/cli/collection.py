@@ -35,6 +35,9 @@ class CollectionCmd(Subcommand):
             help="Minimum accepted mean ANI between any sample and every other sample. If \
 a sample has a mean ANI with all other samples less than --min-ani, variants occuring in \
 no other sample are excluded. Defaults to %(default)s.")
+        params_grp.add_argument("--min-coverage", "-c", type=int, default=10, 
+            help="Minimum coverage needed for a site to be included. Sites with lower \
+coverage are represented as N in the multi-sequence alignment. Defaults to %(default)s.")
         
     def run(
         self,
@@ -42,6 +45,7 @@ no other sample are excluded. Defaults to %(default)s.")
         output: File,
         tmp_dir: Directory,
         min_ani: float,
+        min_coverage: int,
         **kwargs
     ):
         
@@ -54,7 +58,8 @@ ANI of {min_ani}. Writing output to {str(output)}..."
             vcfs = input,
             output = output,
             tmp_dir = tmp_dir,
-            min_ani = min_ani
+            min_ani = min_ani,
+            min_coverage = min_coverage
         ).merge()
         
         logging.info("Done!")

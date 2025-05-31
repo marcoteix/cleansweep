@@ -32,7 +32,8 @@ class TestCleanSweepCollectionCLI(unittest.TestCase):
             str(
                 outdir.joinpath("tmp")
             ),
-            "-a", "0.998"
+            "-a", "0.998",
+            "-c", "10"
         ]
 
         rc = subprocess.run(cmd)

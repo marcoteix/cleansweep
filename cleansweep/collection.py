@@ -18,6 +18,7 @@ class Collection:
     output: File
     tmp_dir: Directory
     min_ani: float = 0.995
+    min_coverage: int = 10
 
     def __post_init__(self):
 
@@ -44,7 +45,7 @@ class Collection:
         gzvcfs = self.prepare_vcfs(
             vcfs = self.vcfs,
             output_directory = self.tmp_dir,
-            filters = "PASS,.,RefVar,FAIL,LowAltBC"
+            min_coverage = self.min_coverage
         )
 
         self.merge_vcfs(
@@ -78,8 +79,8 @@ class Collection:
         self,
         vcfs: List[File],
         output_directory: Directory,
-        include: Union[str, None] = None,
-        filters: str = "PASS,."
+        filters: Union[None, str] = None,
+        min_coverage: int = 10
     ) -> dict:
         
         output_directory = Path(output_directory)
@@ -105,11 +106,11 @@ class Collection:
                 "bcftools",
                 "view",
             ] + (
-                ["-i", include]
-                if not include is None
+                ["-f", filters]
+                if not filters is None 
                 else []
             ) + [
-                "-f", filters,
+                "-i", f"INFO/DP>={min_coverage}",
                 "-o", str(gzvcf),
                 "-O", "z",
                 "--write-index",
@@ -118,7 +119,7 @@ class Collection:
 
             logging.debug(f"Running command \"" + " ".join(command) + "\"...")
 
-            rc = subprocess.run(command)
+            rc = subprocess.run(command, capture_output=True)
 
             self.__raise_run_error(
                 f"Filtering VCF {str(vcf)} failed.",
@@ -217,7 +218,8 @@ class Collection:
                 "chrom",
                 "pos"
             ]
-        )[vcf_df.columns.difference(_VCF_HEADER)]
+        )[vcf_df.columns.difference(_VCF_HEADER)] \
+        .astype(str)
 
         # Compute SNP matrix with all sites
         full_snp_matrix = self.snp_matrix(genotype)
@@ -322,10 +324,10 @@ class Collection:
             (
                 np.logical_and(
                     np.logical_and(
-                        sample1 != sample2,
+                        sample2 != ".",
                         sample1 != "."
                     ),
-                    sample2 != "."
+                    sample2 != sample1
                 )
             ).sum()
         )
