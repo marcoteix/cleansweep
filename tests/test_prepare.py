@@ -6,7 +6,7 @@ from pathlib import Path
 references_dir = Path("tests/data/references")
 
 incomplete_background_fastas = list( 
-    references_dir.glob("incomplete/background..incomplete.fa")
+    references_dir.glob("incomplete/background.*.incomplete.fa")
 )
 incomplete_reference_fasta = references_dir.joinpath(
     "incomplete",
@@ -19,6 +19,14 @@ background_fastas = list(
 reference_fasta = references_dir.joinpath(
     "complete",
     "query.Esch_coli_TUM2802.fa"
+)
+
+background_fastas_gzip = list( 
+    references_dir.glob("complete/background.*.fa.gz")
+)
+reference_fasta_gzip = references_dir.joinpath(
+    "complete",
+    "query.Esch_coli_TUM2802.fa.gz"
 )
 
 # Output directory
@@ -121,6 +129,34 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             "-o",
             str(
                 outdir.joinpath("test_incomplete_references")
+            ),
+            "-V", "4",
+            "-mi", "0.95",
+            "-k"
+        ]
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+
+    def test_all_fastas_gzip(self):
+        
+        cmd = [
+            "cleansweep",
+            "prepare",
+            str(reference_fasta_gzip),
+            "--background"
+        ] + [ 
+            str(x)
+            for x in background_fastas_gzip
+        ] + [
+            "-o",
+            str(
+                outdir.joinpath("test_all_fastas_gzip")
             ),
             "-V", "4",
             "-mi", "0.95",

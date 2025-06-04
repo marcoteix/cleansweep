@@ -10,6 +10,8 @@ from Bio import SeqIO
 import subprocess
 import shutil
 import joblib
+import gzip
+from functools import partial
 
 NUCMER_COORDS_HEADER = [
     "ref_start",
@@ -73,7 +75,14 @@ class NucmerAlignment:
             "cleansweep.reference.fa"
         )
 
-        with open(reference) as input_file, open(output_fasta, "w") as output_file:
+        # Unzip input files if needed
+        reference, queries = self.__unzip_fastas(
+            reference,
+            queries,
+            tmp_dir
+        )
+
+        with self.open_fasta(reference) as input_file, self.open_fasta(output_fasta, "w") as output_file:
 
             reference_fasta = SeqIO.parse(input_file, "fasta")
             
@@ -85,7 +94,7 @@ class NucmerAlignment:
             )
 
         # Extract contig IDs
-        with open(reference) as input_file:
+        with self.open_fasta(reference) as input_file:
 
             reference_fasta = SeqIO.parse(input_file, "fasta")
             
@@ -111,7 +120,7 @@ class NucmerAlignment:
             for record, files in file_map.items():
 
                 coords = self.read_coords(files["coords"])
-                with open(output_fasta, "a") as output_file:
+                with self.open_fasta(output_fasta, "a") as output_file:
                     self.mask(coords, files["fasta"], record, output_file)
 
             # Get a list of unaligned regions in the reference
@@ -126,7 +135,7 @@ class NucmerAlignment:
             # self.gaps should span the full reference
 
             # Get the start and end positions for each contig in the reference
-            with open(reference) as input_file:
+            with self.open_fasta(reference) as input_file:
                 self.gaps = [
                     [1, len(x)]
                     for x in SeqIO.parse(input_file, "fasta")
@@ -220,7 +229,11 @@ class NucmerAlignment:
         if not rc.returncode == 0:
             raise RuntimeError(f"Command \"{' '.join(command)}\" failed with return code {rc.returncode}:\n{rc.stderr}")
 
-    def get_coords(self, delta: File, output: File):
+    def get_coords(
+        self, 
+        delta: File, 
+        output: File
+    ):
 
         command = [
             "show-coords",
@@ -395,3 +408,66 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
             coords = coord,
             invert = True
         )
+    
+    def open_fasta(
+        self,
+        file: File,
+        mode: str = "r"
+    ):
+        
+        if str(file).endswith(".gz"):
+
+            return gzip.open(file, mode = mode+"t")
+        
+        else:
+
+            return open(file, mode = mode)
+        
+    def __unzip_fastas(
+        self,
+        reference: File,
+        queries: Union[None, List[File]],
+        tmp_dir: Directory
+    ) -> Tuple[File, List[File]]:
+        
+        """
+        Unzips input files that are compressed with gzip (.gz) and updates the provided
+        paths to input files.
+
+        Nucmer requires unzipped files, so this is crucial for other methods.
+        """
+
+        unzip_reference = deepcopy(reference)
+        unzip_queries = deepcopy(queries)
+
+        # Check if reference is .gz
+        if str(reference).endswith(".gz"):
+            
+            unzip_reference = tmp_dir.joinpath(
+                str(Path(unzip_reference).name).removesuffix(".gz")
+            )
+
+            with self.open_fasta(reference) as infile, self.open_fasta(unzip_reference, "w") as outfile:
+
+                fasta = SeqIO.parse(infile, "fasta")
+            
+                # Write to output file, uncompressed
+                SeqIO.write(fasta, outfile, "fasta")
+
+        if not queries is None:
+            for n, query in enumerate(queries):
+
+                if str(query).endswith(".gz"):
+
+                    unzip_queries[n] = tmp_dir.joinpath(
+                        str(Path(query).name).removesuffix(".gz")
+                    )
+
+                    with self.open_fasta(query) as infile, self.open_fasta(unzip_queries[n], "w") as outfile:
+
+                        fasta = SeqIO.parse(infile, "fasta")
+                    
+                        # Write to output file, uncompressed
+                        SeqIO.write(fasta, outfile, "fasta")
+
+        return unzip_reference, unzip_queries
