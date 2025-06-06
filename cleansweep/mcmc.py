@@ -315,18 +315,6 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
             alternate_cdf.lt(self.__quantiles[1])
         )
 
-        pd.concat(
-                [
-                    observed.alt_bc,
-                    alternate_cdf
-                ],
-                axis=1
-        ).to_csv(
-            "/Users/mcarvalh/tools/cleansweep/sandbox/output/alt_cdf.txt",
-            sep = "\t"
-        )
-        
-
         # Exclude sites with an alt allele depth not originating from the
         # distribution of depths of coverage for the query strain 
         ll_ratio[~alt_evidence] = -1
