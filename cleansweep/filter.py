@@ -181,8 +181,8 @@ reference sequences."
 
         # Join the probabilities with the full VCF DataFrame
         vcf = vcf.drop(
-            columns = "p_alt",
-            errors = "ignore"
+                columns = "p_alt",
+                errors = "ignore"
             ).join(
                 p_alt.rename("p_alt")
             )

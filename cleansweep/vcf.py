@@ -412,6 +412,7 @@ def write_full_vcf(
             "LowCov"
         )
     )
+
     # Pass ambiguous sites not evaluated by CleanSweep
     full.loc[
         full["filter"].str.contains("Amb"),
@@ -422,6 +423,16 @@ def write_full_vcf(
     full = full.assign(
         **{sample_name: "0"}
     )
+
+    # Fail sites not meeting the alt depth threshold for CleanSweep evaluation
+    full.loc[
+        full["filter"].eq("PASS") & \
+        (
+            ~full.chrom.isin(vcf.chrom) | \
+            ~full.pos.isin(vcf.pos)
+        ),
+        "filter"
+    ] = "FAIL"
 
     # Exclude positions in the VCF to write
     in_out_vcf = (

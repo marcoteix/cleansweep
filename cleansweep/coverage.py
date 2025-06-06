@@ -321,7 +321,7 @@ class CoverageEstimator:
 
         if view_errors:
             raise RuntimeError(
-                f"Reading {str(vcf)} failed. Command: {' '.join(view_cmd)}. Reason: {view_errors.decode("utf-8")}."
+                f"Reading {str(vcf)} failed. Command: {' '.join(view_cmd)}. Reason: {view_errors}."
             )
         
         lines = view_out.splitlines()

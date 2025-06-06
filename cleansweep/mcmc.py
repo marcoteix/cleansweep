@@ -51,6 +51,9 @@ class BaseCountFilter:
             f"Downsampling the input VCF to {downsampling} entries..."
         )
 
+        # NOTE: pyMC fails with macOS silicon chips due to using a wrong path to clang++. May need to set 
+        # pytensor.config.cxx = '/usr/bin/clang++' 
+
         # Downsample the VCF file
         vcf_fit = self.__downsample_vcf(
             vcf, 
@@ -311,6 +314,18 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
             alternate_cdf.gt(self.__quantiles[0]) & \
             alternate_cdf.lt(self.__quantiles[1])
         )
+
+        pd.concat(
+                [
+                    observed.alt_bc,
+                    alternate_cdf
+                ],
+                axis=1
+        ).to_csv(
+            "/Users/mcarvalh/tools/cleansweep/sandbox/output/alt_cdf.txt",
+            sep = "\t"
+        )
+        
 
         # Exclude sites with an alt allele depth not originating from the
         # distribution of depths of coverage for the query strain 
