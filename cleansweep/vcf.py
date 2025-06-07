@@ -174,7 +174,7 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             vcf = vcf.assign(p_alt = vcf["info"] \
                 .apply(
                     lambda x: (
-                        10**(-get_info_value(x, tag="CSP", dtype=int))
+                        get_info_value(x, tag="CSP", dtype=int)
                         if "CSP=" in x 
                         else pd.NA
                     )
@@ -262,6 +262,7 @@ def format_vcf_header(
             "##FILTER=<ID=RefVar,Description=\"Variant also present in the references\">",
             "##FILTER=<ID=FAIL,Description=\"Alternate allele depth does not match the overall depth of coverage\">",
             "##FILTER=<ID=LowAltBC,Description=\"Alternate allele depth is too low\">",
+            "##FILTER=<ID=LowCov,Description=\"Coverage is too low\">",
             "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
             "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
             "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
@@ -330,18 +331,12 @@ def write_vcf(
                     x["info"],
                     "PILON=" + x["filter"],
                     "CSP=" + str(
-                        int(
-                            np.nan_to_num(
-                                x["p_alt"]
-                                if (
-                                    "p_alt" in x and \
-                                    not pd.isna(x["p_alt"]) \
-                                    and not x["p_alt"] is None
-                                )
-                                else 1,
-                                nan = 1
-                            )
-                        )
+                        int(x.p_alt)
+                        if (
+                            "p_alt" in x and \
+                            not pd.isna(x["p_alt"]) and \
+                            not x["p_alt"] is None
+                        ) else "."
                     ),
                     "RD=" + (
                         str(x.ref_bc)

@@ -7,6 +7,7 @@ import numpy as np
 from typing import Dict, List, Tuple, Union, Iterable
 from cleansweep.typing import File, Directory
 from Bio import SeqIO
+from Bio.Seq import Seq
 import subprocess
 import shutil
 import joblib
@@ -338,17 +339,21 @@ start_n: {start_n}, end_n: {end_n}, start: {starts[start_n]}, end: {ends[end_n]}
     ):
 
         self.masks = self.get_mask_limits(coords=coords)
+
+        found_record = False
         
         for record in SeqIO.parse(fasta, "fasta"):
 
             if record.id == query_id:
                 masked_record = record 
 
-                masked_record.seq = self.mask_string(str(record.seq), self.masks)
+                masked_record.seq = Seq(self.mask_string(str(record.seq), self.masks))
                 SeqIO.write(masked_record, output, "fasta")
+                found_record = True
                 break
 
-            raise RuntimeError(f"Found no record in the FASTA file with ID {query_id}.")
+        if not found_record:
+            raise RuntimeError(f"Found no record in the FASTA file {str(fasta)} with ID {query_id}.")
 
     def mask_string(self, s: str, masks: List[Tuple[int, int]]) -> str:
 
