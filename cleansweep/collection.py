@@ -356,7 +356,7 @@ class Collection:
     ) -> Tuple[pd.DataFrame, pd.Series]:
 
         # Number of occurrences across all samples
-        n_samples = genotype.sum(
+        n_samples = genotype.eq("1").sum(
             axis = 1,
             numeric_only = True
         )
