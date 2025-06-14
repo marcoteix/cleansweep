@@ -175,7 +175,7 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
                 .apply(
                     lambda x: (
                         get_info_value(x, tag="CSP", dtype=int)
-                        if "CSP=" in x 
+                        if "CSP=" in x and x != "."
                         else pd.NA
                     )
                 )
