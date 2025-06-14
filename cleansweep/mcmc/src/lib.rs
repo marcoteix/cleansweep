@@ -1,7 +1,11 @@
 use pyo3::prelude::*;
 
 pub mod distributions;
-pub use distributions::BernoulliDistribution;
+pub use distributions::{
+    BernoulliDistribution,
+    BetaDistribution,
+    NegativeBinomialDistribution,
+};
 
 /// Formats the sum of two numbers as string.
 //#[pyfunction]
@@ -13,6 +17,8 @@ pub use distributions::BernoulliDistribution;
 #[pymodule]
 fn mcmc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BernoulliDistribution>()?;
+    m.add_class::<BetaDistribution>()?;
+    m.add_class::<NegativeBinomialDistribution>()?;
     Ok(())
 }
 
