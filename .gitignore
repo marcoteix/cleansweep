@@ -1,5 +1,12 @@
 sandbox/
 
+# Remove Rust stuff
+# Build output
+cleansweep/mcmc/target/
+
+# Dependency directories
+**/Cargo.lock
+
 # Development tests
 tests.deprecated/
 
