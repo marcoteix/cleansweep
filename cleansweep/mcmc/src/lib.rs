@@ -1,6 +1,9 @@
 use pyo3::prelude::*;
 
 pub mod distributions;
+pub mod sampler;
+mod mcmc_utils;
+
 pub use distributions::{
     BernoulliDistribution,
     BetaDistribution,

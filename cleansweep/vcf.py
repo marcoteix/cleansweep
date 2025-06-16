@@ -175,7 +175,7 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
                 .apply(
                     lambda x: (
                         get_info_value(x, tag="CSP", dtype=int)
-                        if "CSP=" in x and x != "."
+                        if "CSP=" in x and not pd.isna(x)
                         else pd.NA
                     )
                 )
@@ -227,7 +227,15 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         return bases[np.argmax(bc)]
         
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
-    return dtype(s.split(tag+"=")[-1].split(delim)[0]) if tag in s else None
+    
+    if not tag in s: return None
+
+    str_value = s.split(tag+"=")[-1].split(delim)[0]
+
+    try:
+        return dtype(str_value)
+    except: 
+        return None
 
 def format_vcf_header(
     header: str,

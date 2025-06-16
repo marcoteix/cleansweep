@@ -5,6 +5,7 @@ use statrs::distribution::{
     Beta, 
     Discrete,
     Continuous,
+    DiscreteUniform,
 };
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -109,6 +110,37 @@ impl BetaDistribution {
     pub fn logp(&self, x: f64) -> PyResult<f64> {
 
             let pdf: f64 = self.pdf(x)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to evaluate PDF: {}", e)))?;
+
+            Ok(pdf.ln())
+        }
+}
+
+#[pyclass(name = "Uniform", subclass)]
+pub struct UniformDistribution {
+    distribution: DiscreteUniform
+}
+
+#[pymethods]
+impl UniformDistribution {
+
+    #[new]
+    pub fn new(min: i32, max: i32) -> PyResult<Self> {
+
+        let distribution = DiscreteUniform::new(min as i64, max as i64)
+            .map_err(|e| PyValueError::
+                new_err(format!("Creating the Uniform distribution failed: {}", e)))?;
+
+        Ok(Self { distribution })
+    } 
+
+    pub fn pmf(&self, x: i32) -> PyResult<f64> {
+            Ok(self.distribution.pmf(x as i64))
+        }
+
+    pub fn logp(&self, x: i32) -> PyResult<f64> {
+
+            let pdf: f64 = self.pmf(x)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to evaluate PDF: {}", e)))?;
 
             Ok(pdf.ln())
