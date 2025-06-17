@@ -9,6 +9,7 @@ import pytensor.tensor as pt
 import logging
 import pytensor
 import platform
+from warnings import warn
 
 # Fix compiler stuff for pymc
 if platform.system() == "Darwin":
@@ -50,6 +51,21 @@ class BaseCountFilter:
         logging.info(
             f"Downsampling the input VCF to {downsampling} entries..."
         )
+
+        # Make sure there are no NaNs in alt_bc and ref_bc
+        n_alt_bc_nan = vcf.alt_bc.isna().sum()
+        if n_alt_bc_nan:
+            warn(f"Found {n_alt_bc_nan} sites with missing alt allele depth. Replaced with 0.")
+            vcf = vcf.assign(
+                alt_bc = vcf.alt_bc.fillna(0)
+            )
+        
+        n_ref_bc_nan = vcf.ref_bc.isna().sum()
+        if n_ref_bc_nan:
+            warn(f"Found {n_ref_bc_nan} sites with missing ref allele depth. Replaced with 0.")
+            vcf = vcf.assign(
+                ref_bc = vcf.ref_bc.fillna(0)
+            )
 
         # NOTE: pyMC fails with macOS silicon chips due to using a wrong path to clang++. May need to set 
         # pytensor.config.cxx = '/usr/bin/clang++' 
