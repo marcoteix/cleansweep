@@ -149,6 +149,11 @@ class BaseCountFilter:
                 vcf.ref_bc.max()
             ) + 5
 
+            if pd.isna(max_bc):
+                max_bc = int(query_coverage_estimate*100)
+                warn(f"Got a NaN maximum allele depth. Max ALT depth: {vcf.alt_bc.max()}; \
+Max REF depth: {vcf.ref_bc.max()}. Setting to {max_bc}.")
+
             background = pm.Categorical.dist(
                 p = np.ones(max_bc) / max_bc,
             )
