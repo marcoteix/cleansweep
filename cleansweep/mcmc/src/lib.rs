@@ -2,26 +2,34 @@ use pyo3::prelude::*;
 
 pub mod distributions;
 pub mod sampler;
-mod mcmc_utils;
+pub mod mcmc_utils;
 
 pub use distributions::{
     BernoulliDistribution,
     BetaDistribution,
     NegativeBinomialDistribution,
+    UniformDistribution,
 };
 
-/// Formats the sum of two numbers as string.
-//#[pyfunction]
-//fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-//    Ok((a + b).to_string())
-//}
+pub use mcmc_utils::{
+    SamplingResult,
+    ChainSamplingResult,
+};
+
+pub use sampler::MetropolisHastings;
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn mcmc(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn cleansweep_mcmc(m: &Bound<'_, PyModule>) -> PyResult<()> {
+
     m.add_class::<BernoulliDistribution>()?;
     m.add_class::<BetaDistribution>()?;
     m.add_class::<NegativeBinomialDistribution>()?;
+    m.add_class::<UniformDistribution>()?;
+    m.add_class::<SamplingResult>()?;
+    m.add_class::<ChainSamplingResult>()?;
+    m.add_class::<MetropolisHastings>()?;
+
     Ok(())
 }
 
