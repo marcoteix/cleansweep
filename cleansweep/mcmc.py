@@ -1,5 +1,6 @@
 #%%
 from typing import Union
+from warnings import warn
 import numpy as np
 import pymc as pm
 from pymc.exceptions import SamplingError
@@ -53,6 +54,21 @@ class BaseCountFilter:
 
         # NOTE: pyMC fails with macOS silicon chips due to using a wrong path to clang++. May need to set 
         # pytensor.config.cxx = '/usr/bin/clang++' 
+
+        # Make sure there are no NaNs in alt_bc and ref_bc
+        n_alt_bc_nan = vcf.alt_bc.isna().sum()
+        if n_alt_bc_nan:
+            warn(f"Found {n_alt_bc_nan} sites with missing alt allele depth. Replaced with 0.")
+            vcf = vcf.assign(
+                alt_bc = vcf.alt_bc.fillna(0)
+            )
+        
+        n_ref_bc_nan = vcf.ref_bc.isna().sum()
+        if n_ref_bc_nan:
+            warn(f"Found {n_ref_bc_nan} sites with missing ref allele depth. Replaced with 0.")
+            vcf = vcf.assign(
+                ref_bc = vcf.ref_bc.fillna(0)
+            )
 
         # Downsample the VCF file
         vcf_fit = self.__downsample_vcf(
@@ -132,6 +148,11 @@ class BaseCountFilter:
                 vcf.alt_bc.max(),
                 vcf.ref_bc.max()
             ) + 5
+
+            if pd.isna(max_bc):
+                max_bc = int(query_coverage_estimate*100)
+                warn(f"Got a NaN maximum allele depth. Max ALT depth: {vcf.alt_bc.max()}; \
+Max REF depth: {vcf.ref_bc.max()}. Setting to {max_bc}.")
 
             background = pm.Categorical.dist(
                 p = np.ones(max_bc) / max_bc,
