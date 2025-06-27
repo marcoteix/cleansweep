@@ -1,12 +1,14 @@
+#%%
 import matplotlib.pyplot as plt 
 from matplotlib.ticker import PercentFormatter
+import numpy as np
 import seaborn as sns
 from dataclasses import dataclass 
-from typing import Tuple, Union
+from typing import Literal, Tuple, Union
 from abc import ABC, abstractmethod
 from cleansweep.typing import File
-from cleansweep.filter import VCFFilter
 from typing_extensions import Self
+from cleansweep_mcmc import SamplingResult
 import pandas as pd
 import joblib
 
@@ -138,8 +140,6 @@ class Plot(ABC):
 
         return ax
     
-
-
 class AlleleDepthsPlot(Plot):
 
     def plot(
@@ -258,3 +258,262 @@ class QueryDepthsPlot(Plot):
         )
 
         return ax
+    
+class TracePlot(Plot):
+
+    def plot(
+        self,
+        samples: SamplingResult,
+        parameter: Literal["alleles", "alt_allele_proportion", "dispersion"],
+        *,
+        palette: str = "Set1",
+        title: str = "",
+        ax: Union[plt.Axes, None] = None,
+        **kwargs
+    ) -> plt.Axes:
+        
+        ax = super().plot(ax)
+        
+        colors = sns.color_palette(
+            palette,
+            len(samples.results)
+        )
+
+        for chain, samples in enumerate(samples.results):
+
+            y = getattr(samples, parameter)
+            n_samples = len(y)
+            
+            if parameter != "alleles":
+
+                ax.plot(
+                    np.arange(n_samples) + 1,
+                    y,
+                    label = f"Chain {chain+1}",
+                    lw = 1,
+                    color = colors[chain],
+                    **kwargs
+                )
+
+                ax.legend()
+
+                self.config_axes(
+                    ax = ax,
+                    move_legend = True,
+                    xlabel = "Iteration",
+                    ylabel = "Value",
+                    title = title
+                )
+
+            else:
+
+                # Get the number of samples from some other parameter
+                n_samples = len(samples.dispersion)
+
+                # Reshape to n_samples x n_alleles
+                alleles = np.array(y).reshape(n_samples, -1)
+
+                # Plot heatmap
+                ax.imshow(
+                    alleles.transpose(),
+                    cmap = "gray",
+                    interpolation = "nearest",
+                    aspect = "auto"
+                )
+
+                self.config_axes(
+                    ax = ax,
+                    move_legend = False,
+                    xlabel = "Iteration",
+                    ylabel = "Allele",
+                    title = title
+                )
+
+        return ax
+    
+class PosteriorPlot(Plot):
+
+    def plot(
+        self,
+        samples: SamplingResult,
+        parameter: Literal["alleles", "alt_allele_proportion", "dispersion"],
+        *,
+        show_chains: bool = True,
+        title: str = "",
+        palette: str = "Set1",
+        ax: Union[plt.Axes, None] = None,
+        hist_kwargs: dict = {},
+        kde_kwargs: dict = {},
+        bar_kwargs: dict = {}
+    ) -> plt.Axes:
+        
+        ax = super().plot(ax)
+        
+        if parameter == "alleles":
+
+            # Get the number of samples from some other parameter
+            n_samples = len(samples.results[0].dispersion)
+
+            # Reshape to n_samples x n_alleles            
+            values = {
+                chain + 1: pd.Series(
+                    np.array(
+                        getattr(x, parameter)
+                    ).reshape(n_samples, -1) \
+                    .mean(axis=0)
+                )
+                for chain, x in enumerate(samples.results)
+            }
+
+            values = pd.concat(
+                values,
+                names = ["chain", "allele"]
+            ).rename("value") \
+            .to_frame() \
+            .reset_index()
+
+            if not show_chains:
+
+                values = values.groupby(
+                    "allele",
+                    as_index = False
+                ).mean()
+
+                palette = None
+
+            sns.barplot(
+                values,
+                x = "allele",
+                y = "value",
+                hue = (
+                    "chain"
+                    if show_chains
+                    else None
+                ),
+                color = (
+                    "0.3"
+                    if not show_chains
+                    else None
+                ),
+                palette = palette,
+                lw = 0,
+                ax = ax,
+                **bar_kwargs
+            )
+
+            self.config_axes(
+                ax = ax,
+                move_legend = True,
+                legend_title = "Chain",
+                xlabel = "Site",
+                ylabel = "Probability",
+                title = title
+            )
+
+            ax.set_xticks([])
+
+        else:
+
+            values = {
+                chain+1: pd.Series(getattr(x, parameter))
+                for chain, x in enumerate(samples.results)
+            }
+
+            values = pd.concat(
+                values,
+                names = ["chain", "iteration"]
+            ).rename("value") \
+            .to_frame() \
+            .reset_index()
+
+            sns.histplot(
+                values,
+                x = "value",
+                hue = (
+                    "chain"
+                    if show_chains
+                    else None
+                ),
+                palette = palette,
+                stat = "density",
+                ax = ax,
+                **hist_kwargs
+            )
+
+            sns.kdeplot(
+                values,
+                x = "value",
+                hue = (
+                    "chain"
+                    if show_chains
+                    else None
+                ),
+                palette = palette,
+                ax = ax,
+                **kde_kwargs
+            )
+
+            self.config_axes(
+                ax = ax,
+                move_legend = True,
+                legend_title = "Chain",
+                xlabel = "Value",
+                ylabel = "Probability",
+                xlim = (0, 1),
+                title = title
+            )
+
+        return ax
+    
+class AutocorrelationPlot(Plot):
+
+    def plot(
+        self,
+        samples: SamplingResult,
+        parameter: Literal["alt_allele_proportion", "dispersion"],
+        *,
+        title: str = "",
+        palette: str = "Set1",
+        max_lag: Union[int, None] = None,
+        ax: Union[plt.Axes, None] = None,
+        **kwargs        
+    ) -> plt.Axes:
+        
+        ax = super().plot(ax)
+
+        colors = sns.color_palette(
+            palette,
+            len(samples.results)
+        )
+
+        for chain, samples in enumerate(samples.results):
+
+            values = pd.Series(getattr(samples, parameter))
+            n_samples = len(values)
+
+            if max_lag is None: max_lag = n_samples-1
+            max_lag = np.minimum(n_samples-1, max_lag)
+
+            # Get autocorrelation at different lags
+            y = [values.autocorr(k) for k in range(max_lag)]
+
+            ax.plot(
+                np.arange(max_lag),
+                y,
+                color = colors[chain],
+                alpha = .8,
+                label = f"Chain {chain + 1}",
+                **kwargs
+            )
+
+        self.config_axes(
+            ax = ax,
+            move_legend = True,
+            legend_title = "Chain",
+            xlabel = "Lag",
+            ylabel = "Autocorrelation",
+            title = title
+        )
+
+        return ax
+# %%

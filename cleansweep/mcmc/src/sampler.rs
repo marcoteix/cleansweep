@@ -5,7 +5,7 @@ use rand::rngs::StdRng;
 use rand::{SeedableRng, Rng};
 use rand_distr::{Normal, Distribution};
 use anyhow::Result;
-use std::io::{self, Write};
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use crate::mcmc_utils::SamplingResult;
 pub use crate::mcmc_utils::{
     check_positive,
@@ -32,9 +32,8 @@ pub struct MetropolisHastings {
     pub proposal_sd: f64, // Variance used in the Normal proposal distribution
     pub proposal_p: f64, // Proportion used in the Bernoulli proposal distribution
     pub block_size: i32, // Number of sites updated in the same block,
-    pub progress: i32,
     rng: Vec<StdRng>,
-    //rng: RwLock<StdRng>,
+    progress_counter: Arc<AtomicUsize>,
 }
 
 #[pymethods]
@@ -50,7 +49,6 @@ impl MetropolisHastings {
         proposal_sd: f64,
         proposal_p: f64,
         block_size: i32,
-        progress: i32,
         seed: i32,
     ) -> PyResult<Self> {
         
@@ -59,7 +57,6 @@ impl MetropolisHastings {
         check_positive(n_burnin, false)?;
         check_positive(n_cores, true)?;
         check_positive(block_size, true)?;
-        check_positive(progress, false)?;
 
         // Create RNGs, one per chain
         //let rng = RwLock::new(StdRng::seed_from_u64(seed as u64));
@@ -76,14 +73,17 @@ impl MetropolisHastings {
                 proposal_sd: proposal_sd,
                 proposal_p: proposal_p,
                 block_size: block_size,
-                progress: progress,
                 rng: rng,
+                progress_counter: Arc::new(AtomicUsize::new(0))
             }
         )
 
     }
 
     pub fn sample(&mut self, py: Python, alt_bc: Vec<i32>, coverage: f64) -> PyResult<Py<SamplingResult>> {
+
+        // Reset progress
+        self.progress_counter.store(0, Ordering::Relaxed);
 
         // Sample from chains in parallel
         
@@ -100,18 +100,25 @@ impl MetropolisHastings {
         Py::new(py, sampling_results)
 
     }
+
+    // Returns an integer representing the progress
+    pub fn progress(&self) -> usize {
+        self.progress_counter.load(Ordering::Relaxed)
+    }
 }
 
 impl MetropolisHastings {
 
     fn sample_chain_parallel(&mut self, inputs: &Vec<(AltBC, f64, StdRng)>) -> Result<Vec<ChainSamplingResult>> {
         
+        let progress = self.progress_counter.clone();
+
         inputs.into_par_iter()
-            .map(|(a, b, c)| self.sample_chain(a, *b, c.clone()))
+            .map(|(a, b, c)| self.sample_chain(a, *b, c.clone(), progress.clone()))
             .collect()
     }
 
-    fn sample_chain(&self, alt_bc: &AltBC, coverage: f64, mut rng: StdRng) -> Result<ChainSamplingResult> {
+    fn sample_chain(&self, alt_bc: &AltBC, coverage: f64, mut rng: StdRng, progress: Arc<AtomicUsize>) -> Result<ChainSamplingResult> {
 
         let n_samples = alt_bc.len()?;
 
@@ -172,16 +179,8 @@ impl MetropolisHastings {
 
             }
 
-            // Print progress
-            if (self.progress > 0) & (i%self.progress == 0) {
-
-                let total = self.n_burnin + self.n_samples;
-                let pct = (i as f64/(total as f64) * 100.0) as u32;
-
-                println!("Performed {}/{} rounds of sampling: {}%", i, total, pct);
-                io::stdout().flush().unwrap();
-
-            }
+            // Increment progress bar
+            progress.fetch_add(1, Ordering::Relaxed);
         }
 
         let acceptance_rate = (n_accepted as f64)/(n_proposals as f64);
@@ -277,6 +276,13 @@ impl MetropolisHastings {
             // Check if we should accept
             accept = self.is_accept(logp, transformed_dispersion, proposed_alt_allele_p, 
                 &proposed_alleles, coverage, &alt_bc, rng)?;
+
+            // If the new proposal would lead to all 0s or all 1s, reject
+            let sum: u64 = proposed_alleles.vector.iter().map(|&e| e as u64).sum();
+        
+            if sum == 0u64 || sum == (proposed_alleles.len()? as u64) {
+                accept = false;
+            }
 
             let block = &mut proposed_alleles.vector[start..end];
 
