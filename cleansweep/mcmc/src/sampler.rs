@@ -218,18 +218,36 @@ impl MetropolisHastings {
         let proposed_dispersion = self.propose_beta(dispersion, rng)?;
         // Transform from [0, 1] -> [0, coverage*10^1.5[ with f(x) = coverage * 10^(x*3-1.5)
         let transformed_proposed_dispersion = self.transform_dispersion(proposed_dispersion, coverage)?;
-        // Check if we should accept the new value
-        let mut accept = self.is_accept(previous_logp, transformed_proposed_dispersion, 
-            alt_allele_proportion, &alleles, coverage, &alt_bc, rng)?;
-        // Replace value if needed and update logp
+        
+        // Propose a new alt allele proportion
+        let proposed_alt_allele_p = self.propose_beta(alt_allele_proportion, rng)?; 
+
+        // Check if we should accept the two updates
+        let mut accept = self.is_accept(
+            previous_logp, 
+            transformed_proposed_dispersion, 
+            proposed_alt_allele_p, 
+            &alleles, 
+            coverage, 
+            &alt_bc, 
+            rng,
+        )?; 
+
+        // Replace if needed and update logp
         let mut new_dispersion = dispersion; 
-        if accept {
+        let mut new_alt_allele_p = alt_allele_proportion;
 
+        if accept { 
             new_dispersion = proposed_dispersion;
+            new_alt_allele_p = proposed_alt_allele_p;
             n_accepted += 1;
-
-            // Update logp
-            logp = self.get_logp(transformed_proposed_dispersion, alt_allele_proportion, &alleles, coverage, &alt_bc)?;
+            logp = self.get_logp(
+                transformed_proposed_dispersion, 
+                new_alt_allele_p, 
+                &alleles, 
+                coverage,
+                &alt_bc,
+            )?;
 
         }
         n_proposals += 1;
@@ -237,22 +255,6 @@ impl MetropolisHastings {
         // Transform the new dispersion value
         let transformed_dispersion = self.transform_dispersion(new_dispersion, coverage)?;
         
-
-        // Propose a new alt allele proportion
-        let proposed_alt_allele_p = self.propose_beta(alt_allele_proportion, rng)?;
-        // Check if we should accept
-        accept = self.is_accept(logp, transformed_dispersion, proposed_alt_allele_p, 
-            &alleles, coverage, &alt_bc, rng)?;
-        // Replace if needed and update logp
-        let mut new_alt_allele_p = alt_allele_proportion;
-        if accept { 
-            new_alt_allele_p = proposed_alt_allele_p;
-            n_accepted += 1;
-            logp = self.get_logp(transformed_dispersion, new_alt_allele_p, &alleles, coverage, &alt_bc)?;
-
-        }
-        n_proposals += 1;
-
         // Propose alleles, in blocks of size self.block_size
         let mut proposed_alleles = alleles.clone()?;
         let mut new_alleles = alleles.clone()?;
@@ -274,7 +276,7 @@ impl MetropolisHastings {
             }
 
             // Check if we should accept
-            accept = self.is_accept(logp, transformed_dispersion, proposed_alt_allele_p, 
+            accept = self.is_accept(logp, transformed_dispersion, new_alt_allele_p, 
                 &proposed_alleles, coverage, &alt_bc, rng)?;
 
             // If the new proposal would lead to all 0s or all 1s, reject

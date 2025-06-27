@@ -1,7 +1,8 @@
+import warnings
 from cleansweep_mcmc import MetropolisHastings, SamplingResult
 import numpy as np
 import pandas as pd 
-from typing import Any, Callable, Union 
+from typing import Any, Callable, Literal, Union 
 from dataclasses import dataclass
 from typing_extensions import Self
 import scipy.stats as sps
@@ -146,6 +147,33 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
 
         return ll_ratio
     
+    def get_rhat(self, parameter: Literal["alt_allele_proportion", "dispersion"]) -> float:
+
+        if self.chains < 4:
+            warnings.warn("Using less than 4 chains. Rhat may not be reliable.")
+
+        # Whitin-chain variance
+        w = np.mean(
+            [
+                np.var(getattr(x, parameter))
+                for x in self.__result.results
+            ]
+        )
+
+        # Betwee-chain variance
+        n_samples = len(self.__result.results[0].dispersion)
+        b = n_samples * np.var(
+            [
+                np.mean(getattr(x, parameter))
+                for x in self.__result.results
+            ]
+        )
+
+        # Marginal posterior variance
+        vplus = ((n_samples-1)/n_samples) * w + (b/n_samples)
+
+        return np.sqrt(vplus/w)
+
     def __aggregate_result(
         self,
         result: SamplingResult,
