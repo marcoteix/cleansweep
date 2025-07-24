@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-
 import numpy as np
 from cleansweep.typing import File 
 from typing import Union, Iterable
