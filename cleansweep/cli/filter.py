@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Union
 import joblib
 from cleansweep.cli.commands import Subcommand
 from cleansweep.vcf import write_vcf, write_full_vcf, VCF
@@ -118,7 +118,6 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
         n_draws: int,
         n_burnin: int,
         threads: int,
-        engine: str,
         verbosity: int,
         output: Directory,
         dispersion_bias: int,
@@ -179,7 +178,6 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
             draws = n_draws,
             burn_in = n_burnin,
             threads = threads,
-            engine = engine,
             dispersion_bias = dispersion_bias,
             alt_allele_p_step_size = alt_allele_p_step_size,
             dispersion_step_size = dispersion_step_size,
@@ -212,10 +210,6 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
                 chrom = prepare_dict['chrom'],
                 min_dp = min_depth
             )
-             
-        # Save the filter and MCMC results
-        vcf_filter.save(outdir.joinpath("cleansweep.filter.swp"))
-        vcf_filter.save_samples(outdir.joinpath("cleansweep.posterior.swp"))
         
         logging.info("Done!")
         

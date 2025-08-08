@@ -195,6 +195,30 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
 
         return np.sqrt(vplus/w)
     
+    def get_posterior(self):
+
+        posterior = {
+            {
+                chain: getattr(x, attr)
+                for chain, x in enumerate(self.__result.results)
+            }
+            for attr in [
+                "alt_allele_proportion",
+                "dispersion"
+            ]
+        }
+
+        # For the allele sampling results, reshape into n_draws x n_sites
+        posterior["alleles"] = {
+                chain: np.reshape(
+                    x.alleles,
+                    (-1, len(self.__index))
+                )
+                for chain, x in enumerate(self.__result.results)
+            }
+        
+        return posterior
+    
     def predict_alleles(self, bias: float = 0.5) -> pd.Series:
 
         # Get mean per allele
@@ -242,7 +266,7 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
 
         return sps.nbinom(
             params.dispersion,
-            params.dispersion/(params.dispersion + params.alt_allele)
+            params.dispersion/(params.dispersion + self.query_coverage)
         )
 
     def __transform_dispersion(self, dispersion: float) -> float:
@@ -256,3 +280,6 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
     def __cdf(self, x: int, distribution: sps.rv_discrete) -> float:
 
         return distribution.cdf(x)
+    
+    # TODO: Change __logpmf to optionally use the posterior for the alleles
+    # TODO: Save a report with the posterior, acceptance rates, and rhat, as we cannot pickle the pyo3 object 

@@ -193,7 +193,7 @@ reference sequences."
             n_samples = downsampling,
             n_total = len(mcmc_vcf)
         )
-        self.basecount_filter.fit(vcf = mcmc_vcf)
+        self.basecount_filter.fit(mcmc_vcf.alt_bc)
 
         # If use_mle is True, force MLE estimator. If False, force 
         # estimates based on posterior probabilities. If None,
