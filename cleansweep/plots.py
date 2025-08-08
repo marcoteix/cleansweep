@@ -512,6 +512,7 @@ class AutocorrelationPlot(Plot):
             legend_title = "Chain",
             xlabel = "Lag",
             ylabel = "Autocorrelation",
+            ylim = (0, 1),
             title = title
         )
 

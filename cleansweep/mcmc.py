@@ -20,12 +20,16 @@ class AlleleDepthFilter:
     burnin: int = 1000
     chains: int = 5
     dispersion_bias: float = 1.0
-    proposal_sd: float = 0.1
+    alt_allele_p_proposal_sd: float = 0.1
+    dispersion_proposal_sd: float = 0.1
     proposal_p: float = 0.1
+    min_acceptance_rate: float = 0.2
+    max_acceptance_rate: float = 0.6
+    adaptive_step: float = 0.1
+    step_size_range: float = 2.0
     block_size: Union[int, float] = 0.05
     threads: int = 1
     random_state: int = 23
-    progress: Union[None, float] = None
     notebook: bool = False
 
     def __post_init__(self):
@@ -40,6 +44,8 @@ class AlleleDepthFilter:
         if self.block_size < 1:
             self.block_size = int(self.block_size * len(alt_bc))
 
+        self.__index = alt_bc.index
+
         # Remove NaNs
         alt_bc = alt_bc.dropna().astype(int)
 
@@ -50,16 +56,18 @@ class AlleleDepthFilter:
             n_cores = self.threads,
             seed = self.random_state,
             dispersion_bias = self.dispersion_bias,
-            proposal_sd = self.proposal_sd,
+            alt_allele_p_proposal_sd = self.alt_allele_p_proposal_sd,
+            dispersion_proposal_sd = self.dispersion_proposal_sd,
             proposal_p = self.proposal_p,
+            target_min_acceptance_rate = self.min_acceptance_rate,
+            target_max_acceptance_rate = self.max_acceptance_rate,
+            adaptive_step_coeff = self.adaptive_step,
             block_size = self.block_size,
+            step_size_range = self.step_size_range,
         )
 
         # Check progress in a concurrent thread
-        if self.progress:
-            self.__sample_with_progress(alt_bc)
-        else:
-            self.__result = self.sampler.sample(alt_bc, self.query_coverage)
+        self.__result = self.sampler.sample(alt_bc, self.query_coverage)
 
         return self
 
@@ -69,11 +77,20 @@ class AlleleDepthFilter:
         
     def get_acceptance_rate(self):
 
-        return self.__aggregate_result(
-            self.__result,
-            "acceptance_rate",
-            function = np.mean
-        )
+        attrs = [
+            "alt_allele_p_acceptance_rate", 
+            "dispersion_acceptance_rate", 
+            "alleles_acceptance_rate"
+        ]
+
+        return {
+            k: self.__aggregate_result(
+                self.__result,
+                k,
+                function = np.mean
+            )
+            for k in attrs
+        }
     
     def get_distribution_parameters(self):
 
@@ -122,7 +139,8 @@ class AlleleDepthFilter:
         self,
         alt_bc: pd.Series,
         ref_bc: pd.Series,
-        power: float = 95.0
+        power: float = 95.0,
+        use_mle: bool = False,
     ) -> pd.Series:
         
         if not isinstance(alt_bc, pd.Series) or not isinstance(ref_bc, pd.Series):
@@ -132,7 +150,10 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
             )
         
         # Get log likelihood ratio
-        ll_ratio = self.logpmf(alt_bc) - self.logpmf(ref_bc)
+        if use_mle:
+            probs = self.logpmf(alt_bc) - self.logpmf(ref_bc)
+        else:
+            probs = self.predict_alleles(bias = 0.5)
 
         # Convert power to a quantile
         quantile = (1 - power)/2
@@ -140,12 +161,12 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
         # Get CDF
         cdfs = self.cdf(alt_bc)
 
-        ll_ratio = pd.Series(ll_ratio).where(
+        probs = pd.Series(probs).where(
             cdfs.between(quantile, 1-quantile),
             pd.NA
         ).rename("p_alt")
 
-        return ll_ratio
+        return probs
     
     def get_rhat(self, parameter: Literal["alt_allele_proportion", "dispersion"]) -> float:
 
@@ -173,6 +194,21 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
         vplus = ((n_samples-1)/n_samples) * w + (b/n_samples)
 
         return np.sqrt(vplus/w)
+    
+    def predict_alleles(self, bias: float = 0.5) -> pd.Series:
+
+        # Get mean per allele
+        p_alt = np.mean(
+            np.vstack(
+                [
+                    np.array(getattr(x, "alleles")).reshape(self.samples, -1)
+                    for x in self.__result.results
+                ]
+            ),
+            axis = 0
+        )
+
+        return pd.Series(p_alt, index = self.__index).gt(bias)
 
     def __aggregate_result(
         self,
@@ -220,41 +256,3 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
     def __cdf(self, x: int, distribution: sps.rv_discrete) -> float:
 
         return distribution.cdf(x)
-    
-    def __sample_with_progress(self, alt_bc: pd.Series):
-
-        # Calculate the total number of iterations
-        total_iter = self.chains * (self.burnin + self.samples)
-
-        progress_bar_class = (
-            tqdm_notebook.tqdm 
-            if self.notebook 
-            else tqdm
-        )
-
-        progress_bar = progress_bar_class(
-            desc = "Sampling...",
-            total = total_iter
-        )
-
-        # Launch sampling in a thread
-        result_holder = {}
-        def run_sampler():
-            result_holder['result'] = self.sampler.sample(alt_bc, self.query_coverage)
-
-        sampler_thread = Thread(target = run_sampler)
-        sampler_thread.start()
-
-        # Check progress every self.progress seconds
-        while sampler_thread.is_alive():
-
-            progress_bar.n = self.sampler.progress()
-            progress_bar.refresh()
-            sleep(self.progress)
-
-        progress_bar.n = total_iter
-        progress_bar.refresh()
-        progress_bar.close()
-
-        sampler_thread.join()
-        self.__result = result_holder["result"]

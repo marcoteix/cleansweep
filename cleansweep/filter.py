@@ -4,7 +4,7 @@ from typing import Union
 import numpy as np
 from cleansweep.coverage import CoverageEstimator
 from cleansweep.io import FilePath
-from cleansweep.mcmc import BaseCountFilter
+from cleansweep.mcmc import AlleleDepthFilter
 from cleansweep.typing import File, Directory
 from cleansweep.augment import AugmentVariantCalls
 from pathlib import Path
@@ -61,15 +61,22 @@ class VCFFilter:
         min_depth: int = 0,
         min_alt_bc: int = 0,
         min_ref_bc: int = 0,
-        max_overdispersion: float = 0.7,
+        max_dispersion: float = 0.7,
         downsampling: Union[int, float] = 1.0,
         chains: int = 5,
         draws: int = 10000,
         burn_in: int = 1000,
         power: float = 0.975,
         threads: int = 5,
-        engine: str = "pymc",
-        overdispersion_bias: int = 1
+        dispersion_bias: int = 1,
+        alt_allele_p_step_size: float = 0.1,
+        dispersion_step_size: float = 0.1,
+        allele_step_size: float = 0.1,
+        min_acceptance_rate: float = 0.2,
+        max_acceptance_rate: float = 0.6,
+        adaptive_step: float = 0.1,
+        block_size: float = 0.05,
+        use_mle: Union[bool, None] = None
     ) -> pd.Series:   
     
         # Step 1: estimate the coverage of the background strain
@@ -96,7 +103,7 @@ class VCFFilter:
         augment_min_alt_bc = augment.estimate_min_alt_bc(
             self.query_coverage,
             alpha = 0.01,
-            overdispersion = max_overdispersion
+            overdispersion = max_dispersion
         )
 
         # Path to the augmented VCF
@@ -155,15 +162,23 @@ reference sequences."
 
         # Step 5: filter SNPs based on allele depths
         
-        self.basecount_filter = BaseCountFilter(
-            chains=chains, 
-            draws=draws, 
-            burn_in=burn_in,
-            power=power, 
-            threads=threads, 
-            engine=engine,
-            overdispersion_bias=overdispersion_bias,
-            max_overdispersion = max_overdispersion
+        self.basecount_filter = AlleleDepthFilter(
+            query_coverage = self.query_coverage,
+            samples = draws,
+            burnin = burn_in,
+            chains = chains,
+            dispersion_bias = dispersion_bias,
+            alt_allele_p_proposal_sd = alt_allele_p_step_size,
+            dispersion_proposal_sd = dispersion_step_size,
+            proposal_p = allele_step_size,
+            min_acceptance_rate = min_acceptance_rate,
+            max_acceptance_rate = max_acceptance_rate,
+            adaptive_step = adaptive_step,
+            step_size_range = 2,
+            block_size = block_size,
+            threads = threads,
+            random_state = self.random_state,
+            notebook = False
         )
         
         # Fit and get the probabilities of the query having the alternate allele
@@ -173,10 +188,25 @@ reference sequences."
             vcf.snp_filter.eq("PASS") 
         ]
 
-        p_alt = self.basecount_filter.fit(
-            vcf = mcmc_vcf, 
-            downsampling = downsampling,
-            query_coverage_estimate = self.query_coverage,
+        # Fit model
+        n_mcmc_variants = self.__convert_downsampling(
+            n_samples = downsampling,
+            n_total = len(mcmc_vcf)
+        )
+        self.basecount_filter.fit(vcf = mcmc_vcf)
+
+        # If use_mle is True, force MLE estimator. If False, force 
+        # estimates based on posterior probabilities. If None,
+        # use MLE if the number of samples passed to MCMC is less
+        # than the total number of variants
+        if use_mle is None:
+            use_mle = (n_mcmc_variants != len(mcmc_vcf))
+        
+        p_alt = self.basecount_filter.predict(
+            mcmc_vcf.alt_bc,
+            mcmc_vcf.ref_bc,
+            power = power,
+            use_mle = use_mle
         )
 
         # Join the probabilities with the full VCF DataFrame
@@ -255,4 +285,17 @@ reference sequences."
         ] = "LowCov"
 
         return vcf
+    
+    def __convert_downsampling(self, n_samples: Union[int, float], n_total: int) -> int:
+        """
+        Converts the number of variants used for MCMC from a fraction
+        of the total to a number.
+        """
+
+        if n_samples > 1:
+            return np.maximum(int(n_samples), n_total)
+        elif n_samples <= 0:
+            return n_total 
+        else:
+            return np.maximum(int(n_samples*n_total), n_total)
 # %%

@@ -5,7 +5,6 @@ use rand::rngs::StdRng;
 use rand::{SeedableRng, Rng};
 use rand_distr::{Normal, Distribution};
 use anyhow::Result;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use crate::mcmc_utils::SamplingResult;
 pub use crate::mcmc_utils::{
     check_positive,
@@ -13,6 +12,7 @@ pub use crate::mcmc_utils::{
     AltBC,
     ChainSamplingResult,
     ModelParameters,
+    AcceptanceRate,
 };
 pub use crate::distributions::{
     BernoulliDistribution,
@@ -29,11 +29,15 @@ pub struct MetropolisHastings {
     pub n_cores: i32, // Number of cores
     pub seed: i32, // Random seed
     pub dispersion_bias: f64,
-    pub proposal_sd: f64, // Variance used in the Normal proposal distribution
-    pub proposal_p: f64, // Proportion used in the Bernoulli proposal distribution
-    pub block_size: i32, // Number of sites updated in the same block,
+    pub alt_allele_p_proposal_sd: f64, // Initial variance used in the Normal proposal distribution
+    pub dispersion_proposal_sd: f64, // Initial variance used in the Normal proposal distribution
+    pub proposal_p: f64, // Initial proportion used in the Bernoulli proposal distribution
+    pub target_min_acceptance_rate: f64, // Minimum desired acceptance rate
+    pub target_max_acceptance_rate: f64, // Maximum desired acceptance rate
+    pub block_size: i32, // Number of sites updated in the same block
+    pub adaptive_step_coeff: f64, // Proportional coefficient for the adaptive step size
+    pub step_size_range: f64, // Allowed range for the step size. If the initial step size is x, it is allowed to range between x/step_size_range and x*step_size_range
     rng: Vec<StdRng>,
-    progress_counter: Arc<AtomicUsize>,
 }
 
 #[pymethods]
@@ -46,9 +50,14 @@ impl MetropolisHastings {
         n_burnin: i32,
         n_cores: i32,
         dispersion_bias: f64,
-        proposal_sd: f64,
+        alt_allele_p_proposal_sd: f64,
+        dispersion_proposal_sd: f64,
         proposal_p: f64,
+        target_min_acceptance_rate: f64,
+        target_max_acceptance_rate: f64,
         block_size: i32,
+        adaptive_step_coeff: f64,
+        step_size_range: f64,
         seed: i32,
     ) -> PyResult<Self> {
         
@@ -70,20 +79,21 @@ impl MetropolisHastings {
                 n_cores: n_cores ,
                 dispersion_bias: dispersion_bias,
                 seed: seed,
-                proposal_sd: proposal_sd,
+                alt_allele_p_proposal_sd: alt_allele_p_proposal_sd,
+                dispersion_proposal_sd: dispersion_proposal_sd,
                 proposal_p: proposal_p,
+                target_min_acceptance_rate: target_min_acceptance_rate,
+                target_max_acceptance_rate: target_max_acceptance_rate,
                 block_size: block_size,
                 rng: rng,
-                progress_counter: Arc::new(AtomicUsize::new(0))
+                adaptive_step_coeff: adaptive_step_coeff,
+                step_size_range: step_size_range,
             }
         )
 
     }
 
     pub fn sample(&mut self, py: Python, alt_bc: Vec<i32>, coverage: f64) -> PyResult<Py<SamplingResult>> {
-
-        // Reset progress
-        self.progress_counter.store(0, Ordering::Relaxed);
 
         // Sample from chains in parallel
         
@@ -100,25 +110,19 @@ impl MetropolisHastings {
         Py::new(py, sampling_results)
 
     }
-
-    // Returns an integer representing the progress
-    pub fn progress(&self) -> usize {
-        self.progress_counter.load(Ordering::Relaxed)
-    }
 }
 
 impl MetropolisHastings {
 
-    fn sample_chain_parallel(&mut self, inputs: &Vec<(AltBC, f64, StdRng)>) -> Result<Vec<ChainSamplingResult>> {
+    fn sample_chain_parallel(&self, inputs: &Vec<(AltBC, f64, StdRng)>) -> Result<Vec<ChainSamplingResult>> {
         
-        let progress = self.progress_counter.clone();
 
         inputs.into_par_iter()
-            .map(|(a, b, c)| self.sample_chain(a, *b, c.clone(), progress.clone()))
+            .map(|(a, b, c)| self.sample_chain(a, *b, c.clone()))
             .collect()
     }
 
-    fn sample_chain(&self, alt_bc: &AltBC, coverage: f64, mut rng: StdRng, progress: Arc<AtomicUsize>) -> Result<ChainSamplingResult> {
+    fn sample_chain(&self, alt_bc: &AltBC, coverage: f64, mut rng: StdRng) -> Result<ChainSamplingResult> {
 
         let n_samples = alt_bc.len()?;
 
@@ -139,16 +143,26 @@ impl MetropolisHastings {
             dispersion: 0.5,
             alt_allele_proportion: 0.5,
             alleles: allele_start_values.to_vec(),
-            n_accept: 0,
-            n_proposals: 0,
+            alleles_acceptance_rate: 0.0,
+            dispersion_acceptance_rate: 0.0,
+            alt_allele_proportion_acceptance_rate: 0.0,
             logp: -1e20,
         };
 
-        // Keep track of the number of accepted proposals
-        let mut n_proposals = 0;
-        let mut n_accepted = 0;
+        // Keep track of the acceptance rates
+        let mut alt_allele_proportion_acceptance_rate_sum: f64 = 0.0;
+        let mut dispersion_acceptance_rate_sum: f64 = 0.0;
+        let mut alleles_acceptance_rate_sum: f64 = 0.0;
 
-        for i in 0..(self.n_burnin + self.n_samples) {
+        // Adaptive step sizes
+        let mut alt_allele_p_step_size = self.alt_allele_p_proposal_sd;
+        let mut dispersion_step_size = self.dispersion_proposal_sd;
+        let mut alleles_step_size = self.proposal_p;
+
+        // Total number of iterations
+        let total_n_iter = self.n_burnin + self.n_samples;
+
+        for i in 0..total_n_iter {
             
             let alleles = Alleles{vector: params.alleles.clone()};
 
@@ -160,11 +174,46 @@ impl MetropolisHastings {
                 &alleles,
                 params.logp,
                 &alt_bc,
+                alt_allele_p_step_size,
+                dispersion_step_size,
+                alleles_step_size,
                 &mut rng,
             )?;
 
-            n_proposals += params.n_proposals;
-            n_accepted += params.n_accept;
+            // Update step sizes based on acceptance rate
+            alt_allele_proportion_acceptance_rate_sum += params.alt_allele_proportion_acceptance_rate;
+            dispersion_acceptance_rate_sum += params.dispersion_acceptance_rate;
+            alleles_acceptance_rate_sum += params.alleles_acceptance_rate;
+
+            alt_allele_p_step_size = self.update_step_size(
+                alt_allele_p_step_size, 
+                alt_allele_proportion_acceptance_rate_sum/(i as f64), 
+                0.20, 
+                0.60, 
+                self.alt_allele_p_proposal_sd / self.step_size_range, 
+                self.alt_allele_p_proposal_sd * self.step_size_range, 
+                self.adaptive_step_coeff
+            );
+
+            dispersion_step_size = self.update_step_size(
+                dispersion_step_size, 
+                dispersion_acceptance_rate_sum/(i as f64), 
+                0.20, 
+                0.60, 
+                self.dispersion_proposal_sd / self.step_size_range, 
+                self.dispersion_proposal_sd * self.step_size_range, 
+                self.adaptive_step_coeff
+            );
+
+            alleles_step_size = self.update_step_size(
+                alleles_step_size, 
+                alleles_acceptance_rate_sum/(i as f64), 
+                0.20, 
+                0.60, 
+                self.proposal_p / self.step_size_range, 
+                self.proposal_p * self.step_size_range, 
+                self.adaptive_step_coeff
+            );
 
             // If we are passed the burn-in stage, keep track of sampled values
             if i >= self.n_burnin {
@@ -178,20 +227,47 @@ impl MetropolisHastings {
                 alleles_samples[allele_start..allele_end].copy_from_slice(&params.alleles);
 
             }
-
-            // Increment progress bar
-            progress.fetch_add(1, Ordering::Relaxed);
         }
-
-        let acceptance_rate = (n_accepted as f64)/(n_proposals as f64);
 
         Ok(ChainSamplingResult::new(
             dispersion_samples,
             alt_allele_proportion_samples,
             alleles_samples,
-            acceptance_rate,
+            alt_allele_proportion_acceptance_rate_sum / (total_n_iter as f64),
+            dispersion_acceptance_rate_sum / (total_n_iter as f64),
+            alleles_acceptance_rate_sum / (total_n_iter as f64),
         )?)
 
+    }
+
+    // Updates step size based on acceptance rates
+    fn update_step_size(
+        &self,
+        step_size: f64,
+        acceptance_rate: f64,
+        min_target: f64,
+        max_target: f64,
+        min_value: f64,
+        max_value: f64,
+        coefficient: f64,
+    ) -> f64 {
+
+        let mut new_step_size = step_size; 
+        let target = (max_target - min_target)/2.0;
+
+        if acceptance_rate < min_target {
+            new_step_size -= coefficient * (target - acceptance_rate);
+        } else if acceptance_rate > max_target {
+            new_step_size += coefficient * (target - acceptance_rate);
+        }
+
+        if new_step_size > max_value {
+            new_step_size = max_value;
+        } else if new_step_size < min_value {
+            new_step_size = min_value;
+        }
+
+        new_step_size
     }
 
     // Implements an iteration of the Metropolis-Hastings algorithm.
@@ -203,57 +279,80 @@ impl MetropolisHastings {
         alleles: &Alleles,
         previous_logp: f64,
         alt_bc: &AltBC,
+        alt_allele_p_step_size: f64,
+        dispersion_step_size: f64,
+        alleles_step_size: f64,
         rng: &mut StdRng,
     ) -> PyResult<ModelParameters> {
 
-        // Keep track of the number of accepted proposals
-        let mut n_accepted = 0;
-        let mut n_proposals = 0;
+        // Keep track of acceptance rates
+        let mut alt_allele_proportion_acceptance_rate = AcceptanceRate::new()?;
+        let mut dispersion_acceptance_rate = AcceptanceRate::new()?;
+        let mut alleles_acceptance_rate = AcceptanceRate::new()?;
+
         // Track the logp after each block update
         let mut logp = previous_logp;
 
         // Propose candidates
 
         // Start with the dispersion
-        let proposed_dispersion = self.propose_beta(dispersion, rng)?;
+        let proposed_dispersion = self.propose_beta(dispersion, rng, dispersion_step_size)?;
         // Transform from [0, 1] -> [0, coverage*10^1.5[ with f(x) = coverage * 10^(x*3-1.5)
         let transformed_proposed_dispersion = self.transform_dispersion(proposed_dispersion, coverage)?;
-        
+        // Check if we should accept the proposed dispersion
+        let mut accept = self.is_accept(
+            logp, 
+            transformed_proposed_dispersion, 
+            alt_allele_proportion, 
+            &alleles, 
+            coverage, 
+            &alt_bc, 
+            rng
+        )?;
+        // Replace if needed and update logp
+        let mut new_dispersion = dispersion; 
+        if accept { 
+            new_dispersion = proposed_dispersion;
+            dispersion_acceptance_rate.accept();
+            logp = self.get_logp(
+                transformed_proposed_dispersion, 
+                alt_allele_proportion, 
+                &alleles, 
+                coverage,
+                &alt_bc,
+            )?;
+        }
+        dispersion_acceptance_rate.increment();
+        // Transform the new dispersion value
+        let transformed_dispersion = self.transform_dispersion(new_dispersion, coverage)?;
+
         // Propose a new alt allele proportion
-        let proposed_alt_allele_p = self.propose_beta(alt_allele_proportion, rng)?; 
+        let proposed_alt_allele_p = self.propose_beta(alt_allele_proportion, rng, alt_allele_p_step_size)?; 
 
         // Check if we should accept the two updates
-        let mut accept = self.is_accept(
-            previous_logp, 
-            transformed_proposed_dispersion, 
+        accept = self.is_accept(
+            logp, 
+            transformed_dispersion, 
             proposed_alt_allele_p, 
             &alleles, 
             coverage, 
             &alt_bc, 
             rng,
         )?; 
-
         // Replace if needed and update logp
-        let mut new_dispersion = dispersion; 
         let mut new_alt_allele_p = alt_allele_proportion;
-
         if accept { 
-            new_dispersion = proposed_dispersion;
             new_alt_allele_p = proposed_alt_allele_p;
-            n_accepted += 1;
+            alt_allele_proportion_acceptance_rate.accept();
             logp = self.get_logp(
-                transformed_proposed_dispersion, 
+                transformed_dispersion, 
                 new_alt_allele_p, 
                 &alleles, 
                 coverage,
                 &alt_bc,
             )?;
-
         }
-        n_proposals += 1;
-
-        // Transform the new dispersion value
-        let transformed_dispersion = self.transform_dispersion(new_dispersion, coverage)?;
+        alt_allele_proportion_acceptance_rate.increment();
         
         // Propose alleles, in blocks of size self.block_size
         let mut proposed_alleles = alleles.clone()?;
@@ -270,7 +369,7 @@ impl MetropolisHastings {
             // Flip allele values with p = self.proposal_p
             for x in &mut proposed_alleles.vector[start..end] {
                 let a: f64 = rng.random();
-                if a < self.proposal_p {
+                if a < alleles_step_size {
                     *x = 1u8 - *x;
                 }
             }
@@ -291,19 +390,28 @@ impl MetropolisHastings {
             // Replace if needed and update logp
             if accept { 
                 new_alleles.copy_from_slice(block, start, end)?;
-                n_accepted += 1;
+                alleles_acceptance_rate.accept();
                 logp = self.get_logp(transformed_dispersion, new_alt_allele_p, &new_alleles, coverage, &alt_bc)?;        
             
             } else {
                 // Reset changes to proposed_alleles
                 block.copy_from_slice(&original_block);
             }
-            n_proposals += 1;
+            alleles_acceptance_rate.increment();
             
         }
 
-        Ok(ModelParameters::new(new_dispersion, new_alt_allele_p, new_alleles.vector, n_accepted, n_proposals, logp)?)
-
+        Ok(
+            ModelParameters::new(
+                new_dispersion, 
+                new_alt_allele_p, 
+                new_alleles.vector, 
+                alt_allele_proportion_acceptance_rate.get_acceptance_rate(),
+                dispersion_acceptance_rate.get_acceptance_rate(),
+                alleles_acceptance_rate.get_acceptance_rate(), 
+                logp
+            )?
+        )
     }
 
     fn transform_dispersion(&self, dispersion: f64, coverage: f64) -> PyResult<f64> {
@@ -314,9 +422,9 @@ impl MetropolisHastings {
        Ok(((dispersion/coverage).log10() + 1.5)/3.0)
     }
 
-    fn propose_beta(&self, x: f64, rng: &mut StdRng) -> PyResult<f64> {
+    fn propose_beta(&self, x: f64, rng: &mut StdRng, step_size: f64) -> PyResult<f64> {
 
-        let normal = Normal::new(0.0, self.proposal_sd).unwrap();
+        let normal = Normal::new(0.0, step_size).unwrap();
         let proposal = x + normal.sample(rng);
 
         Ok(proposal.min(0.999).max(1e-10))
