@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import Union
+from typing import Union, Literal
 import joblib
 from cleansweep.cli.commands import Subcommand
 from cleansweep.vcf import write_vcf, write_full_vcf, VCF
@@ -130,11 +130,17 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
         max_acceptance_rate: float,
         adaptive_step: float,
         block_size: float,
-        use_mle: bool,
+        use_mle: Literal["auto", "true", "false"],
         variants: bool,
         prefix: str,
         **kwargs
     ):
+        if use_mle == "auto":
+            use_mle = None 
+        elif use_mle == "false":
+            use_mle = False 
+        elif use_mle == "true":
+            use_mle = True
         
         outdir = Path(output)
         outdir.mkdir(parents=False, exist_ok=True)

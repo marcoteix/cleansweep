@@ -213,20 +213,32 @@ reference sequences."
         ]
 
         # Fit model
-        n_mcmc_variants = self.__convert_downsampling(
-            n_samples = downsampling,
-            n_total = len(mcmc_vcf)
-        )
-        self.basecount_filter.fit(mcmc_vcf.alt_bc)
 
         # If use_mle is True, force MLE estimator. If False, force 
         # estimates based on posterior probabilities. If None,
         # use MLE if the number of samples passed to MCMC is less
         # than the total number of variants
+        n_mcmc_variants = self.__convert_downsampling(
+            n_samples = downsampling,
+            n_total = len(mcmc_vcf)
+        )
+
         if use_mle is None:
             use_mle = (n_mcmc_variants != len(mcmc_vcf))
 
         self.__used_mle = use_mle
+
+        if use_mle:
+            # Select n_mcmc_variants
+            self.basecount_filter.fit(
+                mcmc_vcf.alt_bc.sample(
+                    n_mcmc_variants,
+                    replace = False
+                )
+            )
+        else:
+            # Use all variants
+            self.basecount_filter.fit(mcmc_vcf.alt_bc)
         
         p_alt = self.basecount_filter.predict(
             mcmc_vcf.alt_bc,

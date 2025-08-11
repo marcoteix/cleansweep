@@ -157,7 +157,7 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
         if use_mle:
             probs = self.logpmf(alt_bc) - self.logpmf(ref_bc)
         else:
-            probs = self.predict_alleles(bias = 0.5)
+            probs = self.predict_alleles()
 
         # Convert power to a quantile
         quantile = (1 - power)/2
@@ -223,7 +223,7 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
         
         return posterior
     
-    def predict_alleles(self, bias: float = 0.5) -> pd.Series:
+    def predict_alleles(self) -> pd.Series:
 
         # Get mean per allele
         p_alt = np.mean(
@@ -236,7 +236,7 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
             axis = 0
         )
 
-        return pd.Series(p_alt, index = self.__index).gt(bias)
+        return pd.Series(p_alt, index = self.__index)
 
     def __aggregate_result(
         self,
@@ -341,5 +341,3 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
             },
             estimates = self.get_distribution_parameters().to_dict()
         )
-
-    # TODO: Save a report with the posterior, acceptance rates, and rhat, as we cannot pickle the pyo3 object 
