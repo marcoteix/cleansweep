@@ -212,5 +212,38 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             0
         )
 
+    def test_posterior_estimation(self):
+
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath("test.vcf.gz")
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_posterior_estimation"
+                )
+            ),
+            "--use-mle", "false"
+        ] + [
+            x if x != "50" else "-1"
+            for x in opts
+        ]
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+
 if __name__ == '__main__':
     unittest.main()

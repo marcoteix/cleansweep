@@ -200,10 +200,6 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
         )
     
-    def remove_indels(self, vcf: pd.DataFrame) -> pd.DataFrame:
-
-        return vcf[vcf.alt.ne(".") & vcf.ref.ne(".")]
-    
     def __alt_from_base_counts(
         self,
         base_counts: str,
