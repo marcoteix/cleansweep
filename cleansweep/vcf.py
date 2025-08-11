@@ -3,7 +3,7 @@ from functools import partial
 import sys
 import pandas as pd
 import subprocess
-from typing import List, Union, Collection
+from typing import List, Union, Collection, Literal
 import numpy as np 
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,7 +143,11 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         if inplace: self.vcf = vcf
         return vcf
     
-    def add_info_columns(self, vcf: pd.DataFrame) -> pd.DataFrame:
+    def add_info_columns(
+        self, 
+        vcf: pd.DataFrame, 
+        kind: Literal["pilon", "freebayes", "auto"] = "auto"
+    ) -> pd.DataFrame:
         """Adds the number of bases supporting the reference and alternate allele and the mean mapping
         quality per site as columns to a VCF DataFrame.
 
@@ -158,47 +162,101 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         # Order of bases in the VCF BC tag
         bases = {"A": 0, "C": 1, "G": 2, "T": 3}
 
-        if not hasattr(vcf, "base_counts"):
-            vcf = vcf.assign(base_counts = vcf["info"] \
-                .apply(partial(get_info_value, tag="BC", dtype=str)))
-            
-        if not hasattr(vcf, "mapq"):
-            vcf = vcf.assign(mapq = vcf["info"] \
-                .apply(partial(get_info_value, tag="MQ", dtype=int)))
-            
-        if not hasattr(vcf, "depth"):
-            vcf = vcf.assign(depth = vcf["info"] \
-                .apply(partial(get_info_value, tag="DP", dtype=int)))
-            
-        if not hasattr(vcf, "p_alt"):
-            vcf = vcf.assign(p_alt = vcf["info"] \
-                .apply(
-                    lambda x: (
-                        get_info_value(x, tag="CSP", dtype=int)
-                        if "CSP=" in x and not pd.isna(x)
-                        else pd.NA
+        if kind == "auto":
+
+            # Figure out which kind of tool was used. If the INFO field has an RO tag,
+            # it's from FreeBayes
+
+            if ";RO=" in vcf["info"].iloc[0]:
+                kind = "freebayes"
+            else:
+                kind = "pilon"
+
+        if kind == "pilon":
+
+            if not hasattr(vcf, "base_counts"):
+                vcf = vcf.assign(base_counts = vcf["info"] \
+                    .apply(partial(get_info_value, tag="BC", dtype=str)))
+                
+            if not hasattr(vcf, "mapq"):
+                vcf = vcf.assign(mapq = vcf["info"] \
+                    .apply(partial(get_info_value, tag="MQ", dtype=int)))
+                
+            if not hasattr(vcf, "depth"):
+                vcf = vcf.assign(depth = vcf["info"] \
+                    .apply(partial(get_info_value, tag="DP", dtype=int)))
+                
+            if not hasattr(vcf, "p_alt"):
+                vcf = vcf.assign(p_alt = vcf["info"] \
+                    .apply(
+                        lambda x: (
+                            get_info_value(x, tag="CSP", dtype=int)
+                            if "CSP=" in x and not pd.isna(x)
+                            else pd.NA
+                        )
                     )
                 )
+                            
+            # If a variant is missing alternate allele information, extract it from the base counts
+            vcf.loc[
+                vcf.alt.eq("."),
+                "alt"
+            ] = vcf[
+                vcf.alt.eq(".")
+            ].apply(
+                lambda x: self.__alt_from_base_counts(
+                    x.base_counts,
+                    x.ref
+                ),
+                axis = 1
             )
-                        
-        # If a variant is missing alternate allele information, extract is from the base counts
-        vcf.loc[
-            vcf.alt.eq("."),
-            "alt"
-        ] = vcf[
-            vcf.alt.eq(".")
-        ].apply(
-            lambda x: self.__alt_from_base_counts(
-                x.base_counts,
-                x.ref
-            ),
-            axis = 1
-        )
-            
-        return vcf.assign(
-            alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
-            ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
-        )
+                
+            return vcf.assign(
+                alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
+                ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
+            )
+        
+        elif kind == "freebayes":
+
+            # Get ref and alt allele depths
+            vcf = vcf.assign(
+                alt_bc = vcf["info"].apply(
+                    partial(get_info_value, tag="AO", dtype=int)
+                ).replace(".", 0).fillna(0).astype(int),
+                ref_bc = vcf["info"].apply(
+                    partial(get_info_value, tag="RO", dtype=int)
+                ).fillna(0).replace(".", 0)
+            )
+
+            if not hasattr(vcf, "base_counts"):
+                # Build a vetor of base counts from the ref and alt allele depts
+                vcf = vcf.assign(
+                    base_counts = vcf.apply(
+                        self.__freebayes_bc,
+                        axis = 1
+                    )
+                )
+
+            if not hasattr(vcf, "depth"):
+                vcf = vcf.assign(depth = vcf["info"] \
+                    .apply(partial(get_info_value, tag="DP", dtype=int)))
+                
+            if not hasattr(vcf, "p_alt"):
+                vcf = vcf.assign(p_alt = vcf["info"] \
+                    .apply(
+                        lambda x: (
+                            get_info_value(x, tag="CSP", dtype=int)
+                            if "CSP=" in x and not pd.isna(x)
+                            else pd.NA
+                        )
+                    )
+                )
+
+            return vcf 
+        
+        else:
+
+            raise ValueError(f"Got unknown kind \"{kind}\". Must be \"pilon\", \"freebayes\", or \"auto\".")
     
     def __alt_from_base_counts(
         self,
@@ -221,6 +279,21 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
 
         # Find the maximum base count (alt allele)
         return bases[np.argmax(bc)]
+    
+    def __freebayes_bc(self, x: pd.Series):
+
+        bases = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+        if not (hasattr(x, "alt_bc") and hasattr(x, "ref_bc")):
+            raise ValueError("One of \"alt_bc\" or \"ref_bc\" is missing from the VCF.")
+        
+        bc = [0, 0, 0, 0]
+        if not pd.isna(x.alt) and x.alt != ".":
+            bc[bases[x.alt]] = x.alt_bc
+        bc[bases[x.ref]] = x.ref_bc 
+
+        return ",".join(np.array(bc).astype(str))
+
         
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     
