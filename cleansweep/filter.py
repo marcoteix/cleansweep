@@ -78,6 +78,30 @@ class VCFFilter:
         block_size: float = 0.05,
         use_mle: Union[bool, None] = None
     ) -> pd.Series:   
+        
+        # Keep track of the passed options
+        self.__opts = {
+            "Number of sites used to estimate the mean depth of coverage": n_coverage_sites,
+            "Minimum depth of coverage": min_depth,
+            "Minimum alternate allele depth": min_alt_bc,
+            "Minimum reference allele depth": min_ref_bc,
+            "Maximum expected dispersion": max_dispersion,
+            "Fraction of candidate variants used in MCMC": downsampling,
+            "Number of MCMC chains": chains,
+            "Number of MCMC draws": draws,
+            "Number of MCMC burn-in draws": burn_in,
+            "Number of threads": threads,
+            "Dispersion bias (alpha and beta)": dispersion_bias,
+            "Alternate allele probability step size": alt_allele_p_step_size,
+            "Dispersion step size": dispersion_step_size,
+            "Allele step size": allele_step_size,
+            "Minimum target acceptance rate": min_acceptance_rate,
+            "Maximum target acceptance rate": max_acceptance_rate,
+            "Adaptive step size coefficient": adaptive_step,
+            "MCMC allele update block size": block_size,
+            "Force MLE?": use_mle,
+            "Random state": self.random_state
+        }
     
         # Step 1: estimate the coverage of the background strain
 
@@ -201,6 +225,8 @@ reference sequences."
         # than the total number of variants
         if use_mle is None:
             use_mle = (n_mcmc_variants != len(mcmc_vcf))
+
+        self.__used_mle = use_mle
         
         p_alt = self.basecount_filter.predict(
             mcmc_vcf.alt_bc,
@@ -231,7 +257,7 @@ reference sequences."
             )
 
             joblib.dump(
-                deepcopy(self.basecount_filter.sampling_results), 
+                deepcopy(self.basecount_filter.to_dict()["posterior"]), 
                 path,
                 compress=5
             )
@@ -246,7 +272,16 @@ reference sequences."
         )
 
         joblib.dump(
-            deepcopy(self),
+            deepcopy(
+                {
+                    "opts": self.__opts,
+                    "query_coverage": self.query_coverage,
+                    "query_coverage_estimator": self.coverage_estimator,
+                    "nucmer_filter": self.nucmer_filter,
+                    "basecount_filter": self.basecount_filter.to_dict(),
+                    "mle": self.__used_mle
+                }
+            ),
             path,
             compress=5
         )

@@ -27,6 +27,8 @@ class FilterCmd(Subcommand):
         io_grp.add_argument("prepare", type=str, help="Output .swp file from CleanSweep prepare \
 (cleansweep.prepare.swp).")
         io_grp.add_argument("output", type=str, help="Output directory.")
+        io_grp.add_argument("--prefix", "-p", type=str, default="cleansweep", help="Prefix added to output files. \
+Defaults to \"%(default)s\".")
         io_grp.add_argument("--variants", action="store_true", help="If set, only writes sites evaluated by \
 CleanSweep, ignoring sites with no evidence of an alternate allele. Writes all sites by default.")
         io_grp.add_argument("--verbosity", "-V", type=int, choices = [0, 1, 2, 3, 4], help = "Logging verbosity. \
@@ -130,6 +132,7 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
         block_size: float,
         use_mle: bool,
         variants: bool,
+        prefix: str,
         **kwargs
     ):
         
@@ -138,7 +141,7 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
 
         # Set up logging
         logging.basicConfig(
-            filename = outdir.joinpath("cleansweep.filter.log"),
+            filename = outdir.joinpath(prefix + ".filter.log"),
             filemode = "w",
             encoding = "utf-8",
             level = (4-verbosity) * 10
@@ -146,7 +149,7 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
 
         # Set a temporary directory
         tmp_dir = Path(output) \
-            .joinpath("tmp")
+            .joinpath(prefix + "_tmp")
         logging.debug(f"Creating a temporary directory in {str(tmp_dir)}...")
         tmp_dir.mkdir(
             exist_ok = True,
@@ -191,13 +194,13 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
 
         # Write the output VCF
         logging.debug(
-            f'Writing filtered VCF to {str(outdir.joinpath("cleansweep.variants.vcf"))}...'
+            f'Writing filtered VCF to {str(outdir.joinpath(prefix + ".variants.vcf"))}...'
         )
         
         if variants:
             write_vcf(
                 vcf = vcf_out,
-                file = outdir.joinpath("cleansweep.variants.vcf"),
+                file = outdir.joinpath(prefix + ".variants.vcf"),
                 header = VCF(str(input)).get_header(),
                 chrom = prepare_dict['chrom'],
             )
@@ -205,11 +208,15 @@ filter faster, but the MCMC may not converge. Defaults to %(default)s.")
             write_full_vcf(
                 vcf = vcf_out,
                 full_vcf = input,
-                file = outdir.joinpath("cleansweep.variants.vcf"),
+                file = outdir.joinpath(prefix + ".variants.vcf"),
                 header = VCF(str(input)).get_header(),
                 chrom = prepare_dict['chrom'],
                 min_dp = min_depth
             )
         
+        vcf_filter.save(
+            outdir.joinpath(prefix + ".filter.swp")
+        )
+
         logging.info("Done!")
         

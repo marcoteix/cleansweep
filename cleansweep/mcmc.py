@@ -36,6 +36,8 @@ class AlleleDepthFilter:
 
         if self.block_size <= 0:
             raise ValueError(f"Block size must be positive. Got {self.block_size}.")
+        
+        self.__fitted = False
 
     def fit(self, alt_bc: pd.Series) -> Self:
 
@@ -68,6 +70,8 @@ class AlleleDepthFilter:
 
         # Check progress in a concurrent thread
         self.__result = self.sampler.sample(alt_bc, self.query_coverage)
+
+        self.__fitted = True
 
         return self
 
@@ -281,5 +285,61 @@ Series. Got {type(alt_bc)} and {type(alt_bc)}."
 
         return distribution.cdf(x)
     
-    # TODO: Change __logpmf to optionally use the posterior for the alleles
+    def __posterior_to_dict(self, result: SamplingResult, parameter: str) -> dict:
+        """
+        Returns a dict with the samples from each chain.
+
+        Parameters
+        ----------
+        result: SamplingResult
+            The sampling results from fitting the filter.
+        parameter: str
+            Parameter for which to gather the posterior.
+
+        Returns
+        -------
+        posterior: dict
+            A dictionary with chain numbers as keys and samples as values.
+        """
+
+        if parameter == "alleles":
+            return {
+                k: np.array(getattr(x, parameter)) \
+                    .reshape(-1, len(self.__index))
+                for k, x in enumerate(result.results)
+            }
+        else:
+            return {
+                k: getattr(x, parameter)
+                for k, x in enumerate(result.results)
+            }
+    
+    def to_dict(self) -> dict:
+        """
+        Returns a dict with the sampling results, acceptance rates, and rhat.
+        """
+
+        if not self.__fitted:
+            raise RuntimeError("The filter must be fitted first before calling to_dict.")
+        
+        params = [
+            "alt_allele_proportion",
+            "dispersion",
+            "alleles"
+        ]
+        
+        return dict(
+            posterior = {
+                k: self.__posterior_to_dict(self.__result, k)
+                for k in params
+            },
+            acceptance_rate = self.get_acceptance_rate(),
+            rhat = {
+                k: self.get_rhat(k)
+                for k in params
+                if k != "alleles"
+            },
+            estimates = self.get_distribution_parameters().to_dict()
+        )
+
     # TODO: Save a report with the posterior, acceptance rates, and rhat, as we cannot pickle the pyo3 object 

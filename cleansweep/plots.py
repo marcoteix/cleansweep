@@ -45,7 +45,6 @@ class Plot(ABC):
     ) -> Self: 
         
         plt.savefig(path)
-        plt.show()
 
         return self
     
@@ -231,7 +230,7 @@ class QueryDepthsPlot(Plot):
 
         sns.histplot( 
             pd.Series(
-                    cleansweep_obj.coverage_estimator.depths
+                    cleansweep_obj["query_coverage_estimator"].depths
                 ).rename("depths") \
                 .to_frame(),
             x = "depths",
@@ -242,7 +241,7 @@ class QueryDepthsPlot(Plot):
         )
 
         ax.vlines(
-            cleansweep_obj.query_coverage,
+            cleansweep_obj["query_coverage"],
             *ax.get_ylim(),
             ls = "--",
             color = ".8",
@@ -263,7 +262,7 @@ class TracePlot(Plot):
 
     def plot(
         self,
-        samples: SamplingResult,
+        posterior: dict,
         parameter: Literal["alleles", "alt_allele_proportion", "dispersion"],
         *,
         palette: str = "Set1",
@@ -276,12 +275,11 @@ class TracePlot(Plot):
         
         colors = sns.color_palette(
             palette,
-            len(samples.results)
+            len(posterior[parameter])
         )
 
-        for chain, samples in enumerate(samples.results):
+        for chain, y in posterior[parameter].items():
 
-            y = getattr(samples, parameter)
             n_samples = len(y)
             
             if parameter != "alleles":
@@ -307,15 +305,9 @@ class TracePlot(Plot):
 
             else:
 
-                # Get the number of samples from some other parameter
-                n_samples = len(samples.dispersion)
-
-                # Reshape to n_samples x n_alleles
-                alleles = np.array(y).reshape(n_samples, -1)
-
                 # Plot heatmap
                 ax.imshow(
-                    alleles.transpose(),
+                    y.transpose(),
                     cmap = "gray",
                     interpolation = "nearest",
                     aspect = "auto"
@@ -335,7 +327,7 @@ class PosteriorPlot(Plot):
 
     def plot(
         self,
-        samples: SamplingResult,
+        posterior: dict,
         parameter: Literal["alleles", "alt_allele_proportion", "dispersion"],
         *,
         show_chains: bool = True,
@@ -351,18 +343,12 @@ class PosteriorPlot(Plot):
         
         if parameter == "alleles":
 
-            # Get the number of samples from some other parameter
-            n_samples = len(samples.results[0].dispersion)
-
             # Reshape to n_samples x n_alleles            
             values = {
                 chain + 1: pd.Series(
-                    np.array(
-                        getattr(x, parameter)
-                    ).reshape(n_samples, -1) \
-                    .mean(axis=0)
+                    x.mean(axis=0)
                 )
-                for chain, x in enumerate(samples.results)
+                for chain, x in posterior[parameter].items()
             }
 
             values = pd.concat(
@@ -415,8 +401,8 @@ class PosteriorPlot(Plot):
         else:
 
             values = {
-                chain+1: pd.Series(getattr(x, parameter))
-                for chain, x in enumerate(samples.results)
+                chain+1: pd.Series(x)
+                for chain, x in posterior[parameter].items()
             }
 
             values = pd.concat(
@@ -469,7 +455,7 @@ class AutocorrelationPlot(Plot):
 
     def plot(
         self,
-        samples: SamplingResult,
+        posterior: dict,
         parameter: Literal["alt_allele_proportion", "dispersion"],
         *,
         title: str = "",
@@ -483,12 +469,12 @@ class AutocorrelationPlot(Plot):
 
         colors = sns.color_palette(
             palette,
-            len(samples.results)
+            len(posterior[parameter])
         )
 
-        for chain, samples in enumerate(samples.results):
+        for chain, samples in posterior[parameter].items():
 
-            values = pd.Series(getattr(samples, parameter))
+            values = pd.Series(samples)
             n_samples = len(values)
 
             if max_lag is None: max_lag = n_samples-1
