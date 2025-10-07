@@ -1,9 +1,9 @@
 #!/bin/bash 
 
 cleansweep inspect \
-    test/outputs/filter/cleansweep.variants.vcf \
-    test/outputs/inspect \
-    -c test/outputs/filter/cleansweep.filter.swp \
+    tests/outputs/filter/test_complete_references/cleansweep.variants.vcf \
+    tests/outputs/inspect \
+    -c tests/outputs/filter/test_complete_references/cleansweep.filter.swp \
     --how all \
     -f png \
     -adl \

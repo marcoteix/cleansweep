@@ -155,9 +155,6 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
                 columns \"ref_bc\" and \"alt_bc\", respectively), and mapping quality (\"mapq\").
         """
 
-        # Order of bases in the VCF BC tag
-        bases = {"A": 0, "C": 1, "G": 2, "T": 3}
-
         if not hasattr(vcf, "base_counts"):
             vcf = vcf.assign(base_counts = vcf["info"] \
                 .apply(partial(get_info_value, tag="BC", dtype=str)))
@@ -194,11 +191,37 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             ),
             axis = 1
         )
-            
+    
         return vcf.assign(
-            alt_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.alt]]), axis=1),
-            ref_bc=vcf.apply(lambda x: int(x.base_counts.split(",")[bases[x.ref]]), axis=1),
+            alt_bc = vcf.apply(
+                lambda x: self.extract_base_counts(
+                    x.base_counts,
+                    x.alt
+                ),
+                axis = 1
+            ),
+            ref_bc = vcf.apply(
+                lambda x: self.extract_base_counts(
+                    x.base_counts,
+                    x.ref
+                ),
+                axis = 1
+            )
         )
+    
+    def extract_base_counts(
+        self,
+        base_counts: str,
+        nucleotide: str,
+    ) -> int:
+        
+        # Order of bases in the VCF BC tag
+        bases = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+        if isinstance(nucleotide, str) and nucleotide in bases:
+            return int(base_counts.split(",")[bases[nucleotide]])
+        else:
+            return pd.NA
     
     def remove_indels(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
@@ -274,7 +297,8 @@ def format_vcf_header(
             "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
             "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
             "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
-            "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">"
+            "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">",
+            "##INFO=<ID=LowCov,Type=String,Description=\"Coverage is too low\">"
         ]
         if add_filters
         else []
