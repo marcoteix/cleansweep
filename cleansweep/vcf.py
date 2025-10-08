@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 from io import StringIO
+from warnings import warn
 from cleansweep.typing import File
 from cleansweep.__version__ import __version__
 
@@ -221,7 +222,8 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         if isinstance(nucleotide, str) and nucleotide in bases:
             return int(base_counts.split(",")[bases[nucleotide]])
         else:
-            return pd.NA
+            warn(f"Got unknown base {nucleotide}. Setting base count to 0.")
+            return 0
     
     def remove_indels(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
