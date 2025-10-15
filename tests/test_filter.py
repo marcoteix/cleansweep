@@ -212,5 +212,32 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             0
         )
 
+    def test_freebayes_vcf(self):
+
+        cmd = [
+            "cleansweep",
+            "filter",
+            "tests/data/freebayes/freebayes.vcf.gz",
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_freebayes_vcf"
+                )
+            )
+        ] + opts
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+
 if __name__ == '__main__':
     unittest.main()

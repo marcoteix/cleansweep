@@ -157,12 +157,90 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         """
 
         if not hasattr(vcf, "base_counts"):
-            vcf = vcf.assign(base_counts = vcf["info"] \
-                .apply(partial(get_info_value, tag="BC", dtype=str)))
+
+            # Check if the VCF has a BC tag in the info field (Pilon)
+            if "BC=" in vcf.iloc[0]["info"]:
+                vcf = vcf.assign(
+                    base_counts = vcf["info"] \
+                        .apply(
+                            partial(
+                                get_info_value, 
+                                tag="BC", 
+                                dtype=str
+                            )
+                        )
+                )
+
+            elif (
+                ";RO=" in vcf.iloc[0]["info"]
+            ):
+                # Extract base counts from the AO and RO fields instead (FreeBayes)
+                vcf = vcf.assign(
+                    alt_bc = vcf["info"] \
+                        .apply(
+                            partial(
+                                get_info_value,
+                                tag = ";AO",
+                                dtype = int
+                            )
+                        ).fillna(0) \
+                        .astype(int),
+                    ref_bc = vcf["info"] \
+                        .apply(
+                            partial(
+                                get_info_value,
+                                tag = "RO",
+                                dtype = int
+                            )
+                        ).astype(int)
+                )
+
+                # Add base counts
+                vcf = vcf.assign(
+                    base_counts = vcf.apply(
+                        lambda x: self.__base_counts_from_ro_ao(
+                            x.ref_bc,
+                            x.alt_bc,
+                            x.ref,
+                            x.alt
+                        ),
+                        axis = 1
+                    )
+                )
+            else:
+                raise ValueError(
+                    "Failed to find a tag in the INFO field with allele depth information (BC or AO/RO)."
+                )
             
         if not hasattr(vcf, "mapq"):
-            vcf = vcf.assign(mapq = vcf["info"] \
-                .apply(partial(get_info_value, tag="MQ", dtype=int)))
+            
+            if "MQ=" in vcf["info"].iloc[0]:
+                # Pilon VCF
+                vcf = vcf.assign(mapq = vcf["info"] \
+                    .apply(partial(get_info_value, tag="MQ", dtype=int)))
+            else:
+                # FreeBayes VCF. Reports alignment quality for ref and alt alleles
+                # separately. Use alt allele quality if available; else, use ref
+                vcf = vcf.assign(
+                    mapq = vcf["info"] \
+                        .apply(
+                            partial(
+                                get_info_value,
+                                tag = "MQM",
+                                dtype = float
+                            )
+                        ).where(
+                            vcf["info"].str.contains("MQM="),
+                            vcf["info"] \
+                                .apply(
+                                    partial(
+                                        get_info_value,
+                                        tag = "MQMR",
+                                        dtype = float
+                                    )
+                                )
+                        )
+                )
             
         if not hasattr(vcf, "depth"):
             vcf = vcf.assign(depth = vcf["info"] \
@@ -193,22 +271,29 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             axis = 1
         )
     
-        return vcf.assign(
-            alt_bc = vcf.apply(
-                lambda x: self.extract_base_counts(
-                    x.base_counts,
-                    x.alt
-                ),
-                axis = 1
-            ),
-            ref_bc = vcf.apply(
-                lambda x: self.extract_base_counts(
-                    x.base_counts,
-                    x.ref
-                ),
-                axis = 1
+        if not hasattr(vcf, "alt_bc"): 
+            vcf = vcf.assign(
+                alt_bc = vcf.apply(
+                    lambda x: self.extract_base_counts(
+                        x.base_counts,
+                        x.alt
+                    ),
+                    axis = 1
+                )
             )
-        )
+
+        if not hasattr(vcf, "ref_bc"): 
+            vcf = vcf.assign(
+                ref_bc = vcf.apply(
+                    lambda x: self.extract_base_counts(
+                        x.base_counts,
+                        x.ref
+                    ),
+                    axis = 1
+                )
+            )
+
+        return vcf
     
     def extract_base_counts(
         self,
@@ -250,6 +335,28 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
 
         # Find the maximum base count (alt allele)
         return bases[np.argmax(bc)]
+    
+    def __base_counts_from_ro_ao(
+        self,
+        ro: int,
+        ao: int,
+        ref: str,
+        alt: str
+    ) -> List[int]:
+        """
+        Creates a vector of base counts from the RO and AO info tags in a VCF line.
+        Used for FreeBayes input VCFs
+        """
+        
+        bases = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+        base_counts = ["0"] * 4
+        base_counts[bases[ref]] = str(ro) 
+        if alt != ".":
+            base_counts[bases[alt]] = str(ao) 
+
+        return ",".join(base_counts)
+
         
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     
