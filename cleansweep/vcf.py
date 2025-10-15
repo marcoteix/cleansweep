@@ -403,7 +403,7 @@ def format_vcf_header(
             "##FILTER=<ID=FAIL,Description=\"Alternate allele depth does not match the overall depth of coverage\">",
             "##FILTER=<ID=LowAltBC,Description=\"Alternate allele depth is too low\">",
             "##FILTER=<ID=LowCov,Description=\"Coverage is too low\">",
-            "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
+            "##INFO=<ID=ORGFILT,Number=1,Type=String,Description=\"Original FILTER flag in the input VCF\">",
             "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
             "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
             "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">",
@@ -443,10 +443,14 @@ def write_vcf(
         vcf = vcf.assign(
             cleansweep_filter = pd.NA
         )
+
+    sample_name = vcf.columns.to_list()[
+        vcf.columns.to_list().index("format") + 1
+    ]
         
     # Subset the columns in the VCF spec and add fields to INFO 
     fmt_vcf = vcf[
-        _VCF_HEADER
+        _VCF_HEADER[:-1] + [sample_name]
     ].rename(
         columns = {
             k: k.upper()
@@ -464,13 +468,13 @@ def write_vcf(
                 .eq("PASS") \
                 .astype("Int8")
             if "cleansweep_filter" in vcf
-            else vcf["sample"]
+            else vcf[sample_name]
         ),
         INFO = vcf.apply(
             lambda x: ";".join(
                 [
                     x["info"],
-                    "PILON=" + x["filter"],
+                    "ORGFILT=" + x["filter"],
                     "CSP=" + str(
                         int(x.p_alt)
                         if (

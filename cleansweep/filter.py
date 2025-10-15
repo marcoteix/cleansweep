@@ -15,6 +15,8 @@ import logging
 from copy import deepcopy
 import logging
 
+from cleansweep.vcf import VCF
+
 class NucmerSNPFilter:
 
     def __init__(self):
@@ -109,12 +111,25 @@ class VCFFilter:
             .joinpath(
                 "cleansweep.augmented.vcf"
             )
-        vcf = augment.augment(
-            vcf = vcf,
-            query = query,
-            min_alt_bc = augment_min_alt_bc,
-            output = augmented_vcf
-        )
+        
+        try:
+            vcf = augment.augment(
+                vcf = vcf,
+                query = query,
+                min_alt_bc = augment_min_alt_bc,
+                output = augmented_vcf
+            )
+        except Exception as e:
+
+            logging.warning(
+                f"Augmenting variant calls failed with exception {e}. You can ignore \
+this warning if the input VCF is from FreeBayes."
+            )
+
+            vcf = VCF(vcf).read(
+                chrom = query, 
+                exclude = ["\'ALT=\".\" & REF!=\".\"\'"],
+            )
 
         # Delete tmp directory
         shutil.rmtree(
