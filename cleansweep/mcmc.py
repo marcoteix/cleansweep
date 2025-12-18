@@ -15,7 +15,6 @@ from warnings import warn
 if platform.system() == "Darwin":
     pytensor.config.cxx = '/usr/bin/clang++'
 
-
 @dataclass
 class BaseCountFilter:
 

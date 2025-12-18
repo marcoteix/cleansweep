@@ -15,7 +15,6 @@ from cleansweep.__version__ import __version__
 
 _VCF_HEADER = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "info", "format", "sample"]
 
-
 @dataclass
 class VCF:
 
@@ -23,7 +22,7 @@ class VCF:
 
     def __post_init__(self):
 
-        if isinstance(self.file, Path): self.file = str(self.file) 
+        if isinstance(self.file, Path): self.file = str(self.file)
 
     def read(
         self, 
