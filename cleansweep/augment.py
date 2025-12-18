@@ -2,7 +2,8 @@ import subprocess
 from dataclasses import dataclass
 from cleansweep.typing import File
 from cleansweep.vcf import VCF
-from scipy.stats import nbinom
+from scipy.stats import nbinom, rv_discrete
+from typing import Union
 import pandas as pd
 import logging
 
@@ -74,13 +75,26 @@ command \"{' '.join(cmd)}\". Got the following error: {rc.stdout}."
         self,
         query_coverage: float,
         alpha: float = 0.01,
-        overdispersion: float = .55
+        overdispersion: float = .55,
+        distribution: Union[rv_discrete, None] = None
     ) -> int:
         
-        var = query_coverage * (10 ** (overdispersion * 3 - 1.5))
-        p = var/(var + query_coverage)
-        n = var
+        if distribution is None:
+            # Use estimated depth of coverage and the maximum overdispersion
+
+            var = query_coverage * (10 ** (overdispersion * 3 - 1.5))
+            p = var/(var + query_coverage)
+            n = var
+            
+            return int(
+                nbinom(n = n, p = p).ppf(alpha)
+            )
         
-        return int(
-            nbinom(n = n, p = p).ppf(alpha)
-        )
+        else:
+            # Fitted the depth of coverage distribution to unaligned regions
+            # of the target genome. Use the inferred distribution to compute
+            # a lower bound for the alternate allele depth
+
+            return int(
+                distribution.ppf(alpha)
+            )

@@ -1,6 +1,6 @@
 #%%
 from dataclasses import dataclass
-from typing import Union
+from typing import Literal, Union
 import numpy as np
 from cleansweep.coverage import CoverageEstimator
 from cleansweep.io import FilePath
@@ -59,6 +59,7 @@ class VCFFilter:
         nucmer_snps: pd.DataFrame,
         tmp_dir: Directory,
         *,
+        method: Literal["mixture", "fast"] = "mixture",
         n_coverage_sites: int = 100000,
         min_depth: int = 0,
         min_alt_bc: int = 0,
@@ -73,6 +74,18 @@ class VCFFilter:
         engine: str = "pymc",
         overdispersion_bias: int = 1
     ) -> pd.Series:   
+        
+        if not method in [
+            "mixture",
+            "fast"
+        ]:
+            
+            msg = f"Got unknown method \"{method}\". Must be one of \"mixture\" \
+(fits a mixture model using MCMC estimation, based on allele depths) or \"fast\" \
+(estimates parameters for the distribution of depth of coverages along the target \
+strain based on unaligned regions and the method of moments)."
+            logging.error(msg)
+            raise ValueError(msg)
     
         # Step 1: estimate the coverage of the background strain
 
@@ -82,13 +95,14 @@ class VCFFilter:
             random_state = self.random_state
         )
 
-        self.query_coverage = self.coverage_estimator \
+        self.query_coverage, self.depth_distribution = self.coverage_estimator \
             .fit(
                 vcf = vcf,
                 query = query,
                 gaps = gaps,
                 n_lines = n_coverage_sites,
-                min_depth = min_depth
+                min_depth = min_depth,
+                method_of_moments = (method == "fast")
             )
         
         # Step 2: include sites with a non-reference base count > alpha regardless
@@ -98,7 +112,8 @@ class VCFFilter:
         augment_min_alt_bc = augment.estimate_min_alt_bc(
             self.query_coverage,
             alpha = 0.01,
-            overdispersion = max_overdispersion
+            overdispersion = max_overdispersion,
+            distribution = self.depth_distribution
         )
 
         # Path to the augmented VCF
@@ -163,9 +178,11 @@ with low alternate base counts, and {vcf.low_ref_bc.sum()} variants with low ref
             nucmer_snps = nucmer_snps
         )
 
+        n_excluded = vcf.snp_filter.ne('PASS').sum()
+
         logging.info( 
-            f"Filtered out {vcf.snp_filter.ne('PASS').sum()} variants also found in the \
-reference sequences."
+            f"Filtered out {n_excluded} ({n_excluded/len(vcf):.3%}) variant positions also \
+varying between reference sequences."
         )
 
         # Step 5: filter SNPs based on allele depths
@@ -192,6 +209,8 @@ reference sequences."
             vcf = mcmc_vcf, 
             downsampling = downsampling,
             query_coverage_estimate = self.query_coverage,
+            method = method,
+            distribution = self.depth_distribution
         )
 
         # Join the probabilities with the full VCF DataFrame

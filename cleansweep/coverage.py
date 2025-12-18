@@ -1,20 +1,11 @@
-from functools import partial
-import random
-from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
-from sklearn.mixture import BayesianGaussianMixture as DPGMM
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
 import pandas as pd
 import numpy as np
-from typing import List, Tuple, Union, Collection, Callable, Any
-from cleansweep.vcf import VCF, get_info_value
+from typing import Tuple, Union
 from cleansweep.typing import File
 from warnings import warn
-from scipy.stats import norm, multivariate_normal, poisson, rv_continuous
+from scipy import stats as sps
 from numpy.typing import ArrayLike
 from dataclasses import dataclass
-import subprocess
-import io
 import logging
 import pysam
 
@@ -36,8 +27,9 @@ class CoverageEstimator:
         gaps: pd.DataFrame,
         n_lines: int = 100000,
         min_depth: int = 0,
+        method_of_moments: bool = False,
         **kwargs
-    ) -> float:
+    ) -> Tuple[float, Union[None, sps.rv_discrete]]:
 
         # Read depths from a VCF file
         depths = self.read(
@@ -49,15 +41,23 @@ class CoverageEstimator:
 
         # Remove NaNs
         depths = depths[~np.isnan(depths)]
+
+        if not len(depths):
+
+            msg = f"Found no valid unaligned sites with available depths of coverage."
+            logging.error(msg)
+            raise ValueError(msg)
+
         # Remove low coverage sites
         depths = depths[depths >= min_depth]
 
-        query_coverage, _ = self.estimate(
+        query_coverage, nbinom = self.estimate(
             depths,
+            method_of_moments = method_of_moments,
             **kwargs
         )
 
-        return query_coverage
+        return query_coverage, nbinom
 
     def read(
         self,
@@ -88,10 +88,38 @@ depths of coverage."
     def estimate(
         self,
         depths: ArrayLike,
+        method_of_moments: bool = False,
         **kwargs
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, Union[None, sps.rv_discrete]]:
         
-        return np.median(depths), None
+        dist = None
+        
+        # Fit a Negative Binomial distribution to the data using
+        # the method of moments
+        if method_of_moments:
+
+            mean = np.mean(depths)
+            var = np.var(depths)
+
+            r = mean**2 / (var - mean)
+
+            if r <= 0:
+                msg = f"Method of moments estimator for r is non-positive. Got r = {r}."
+                logging.error(msg)
+                raise RuntimeError(msg)
+            
+            p = mean/var 
+
+            if p > 1:
+                msg = f"Method of moments estimator for p > 1. Got p = {p}."
+                logging.error(msg)
+                raise RuntimeError(msg)
+            
+            logging.debug(f"Method of moments estimators: r = {r}, p = {p}")
+
+            dist = sps.nbinom(r, p)
+        
+        return np.median(depths), dist
 
     def downsample_vcf_depths(
         self,
@@ -140,14 +168,53 @@ depths of coverage."
 
         # Fetch VCF lines with pysam and extract depth of coverage
         depths = [
-            next(
-                pysam_vcf.fetch(
+            self.__get_dp(
+                pysam_vcf,
+                query, i
+            )
+            for i in selected_loci
+            if not self.__get_dp(
+                pysam_vcf,
+                query, i
+            ) is None
+        ]
+
+        if not len(depths):
+
+            print(
+                "",
+                gaps,
+                unaligned_loci,
+                selected_loci,
+                next(
+                    pysam_vcf.fetch(
+                        query, 1287402, 1287402+1
+                    )
+                ).info.get("DP"),
+                sep = "\n"
+            )
+
+        return np.array(depths)
+    
+    def __get_dp(
+        self,
+        record: pysam.VariantFile,
+        query: str,
+        i: int
+    ) -> float:
+        
+        try:
+
+            depth = next(
+                record.fetch(
                     contig = query,
                     start = i,
                     stop = i + 1
                 )
             ).info.get("DP")
-            for i in selected_loci
-        ]
 
-        return depths
+        except StopIteration:
+
+            depth = None 
+
+        return depth
