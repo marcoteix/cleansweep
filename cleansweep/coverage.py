@@ -181,17 +181,29 @@ depths of coverage."
 
         if not len(depths):
 
-            print(
-                "",
-                gaps,
-                unaligned_loci,
-                selected_loci,
-                next(
-                    pysam_vcf.fetch(
-                        query, 1287402, 1287402+1
-                    )
-                ).info.get("DP"),
-                sep = "\n"
+            # Selected positions not in the VCF file. Maybe the input
+            # is a VCF with variant positions only or filtered some
+            # other way. Warn the user and fall back on reading the 
+            # entire file and selecting existing positions at random
+            msg = "Failed to randomly select positions in the input \
+VCF file. Please make sure the input file contains information for \
+all loci. Attempting to select from existing lines in the VCF file. "
+            warn(msg)
+            logging.warning(msg)
+
+            # Read existing positions for the query
+            existing_depths = [
+                x.info.get("DP")
+                for x in pysam_vcf.fetch(query)
+            ]
+
+            depths = self.__rng.choice(
+                existing_depths,
+                size = np.minimum(
+                    len(existing_depths),
+                    n_lines
+                ),
+                replace = False
             )
 
         return np.array(depths)
