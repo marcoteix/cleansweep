@@ -30,7 +30,6 @@ opts = [
 
 class TestCleanSweepPrepareCLI(unittest.TestCase):
 
-    """
     def test_uniform_edge_bc(self):
 
         cmd = [
@@ -239,7 +238,6 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             rc.returncode,
             0
         )
-    """
     
     def test_uniform_edge_bc_fast(self):
         cmd = [
@@ -264,7 +262,6 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
         rc = subprocess.run(cmd)
         self.assertEqual(rc.returncode, 0)
 
-    """
     def test_no_shared_regions_fast(self):
         cmd = [
             "cleansweep",
@@ -405,7 +402,6 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
         ] + opts
         rc = subprocess.run(cmd)
         self.assertEqual(rc.returncode, 0)
-    """
 
 if __name__ == '__main__':
     unittest.main()
