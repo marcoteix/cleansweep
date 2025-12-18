@@ -118,6 +118,8 @@ depths of coverage."
             logging.debug(f"Method of moments estimators: r = {r}, p = {p}")
 
             dist = sps.nbinom(r, p)
+            self.r = r
+            self.p = p
         
         return np.median(depths), dist
 

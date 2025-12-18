@@ -75,6 +75,8 @@ class VCFFilter:
         overdispersion_bias: int = 1
     ) -> pd.Series:   
         
+        self.method = method
+        
         if not method in [
             "mixture",
             "fast"
