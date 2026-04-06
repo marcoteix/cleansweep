@@ -27,7 +27,6 @@ class CoverageEstimator:
         gaps: pd.DataFrame,
         n_lines: int = 100000,
         min_depth: int = 0,
-        method_of_moments: bool = False,
         **kwargs
     ) -> Tuple[float, Union[None, sps.rv_discrete]]:
 
@@ -53,7 +52,6 @@ class CoverageEstimator:
 
         query_coverage, nbinom = self.estimate(
             depths,
-            method_of_moments = method_of_moments,
             **kwargs
         )
 
@@ -88,39 +86,20 @@ depths of coverage."
     def estimate(
         self,
         depths: ArrayLike,
-        method_of_moments: bool = False,
         **kwargs
     ) -> Tuple[float, Union[None, sps.rv_discrete]]:
         
         dist = None
         
-        # Fit a Negative Binomial distribution to the data using
-        # the method of moments
-        if method_of_moments:
+        # Fit a Negative Binomial distribution to the data using MLE
+        r, p = self._fit_nbinom_mle(depths)
 
-            mean = np.mean(depths)
-            var = np.var(depths)
+        logging.debug(f"NB MLE estimates: r = {r:.4f}, p = {p:.4f}")
 
-            r = mean**2 / (var - mean)
+        dist = sps.nbinom(r, p)
+        self.r = r
+        self.p = p
 
-            if r <= 0:
-                msg = f"Method of moments estimator for r is non-positive. Got r = {r}."
-                logging.error(msg)
-                raise RuntimeError(msg)
-            
-            p = mean/var 
-
-            if p > 1:
-                msg = f"Method of moments estimator for p > 1. Got p = {p}."
-                logging.error(msg)
-                raise RuntimeError(msg)
-            
-            logging.debug(f"Method of moments estimators: r = {r}, p = {p}")
-
-            dist = sps.nbinom(r, p)
-            self.r = r
-            self.p = p
-        
         return np.median(depths), dist
 
     def downsample_vcf_depths(

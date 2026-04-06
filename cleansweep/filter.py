@@ -103,9 +103,11 @@ strain based on unaligned regions and the method of moments)."
                 query = query,
                 gaps = gaps,
                 n_lines = n_coverage_sites,
-                min_depth = min_depth,
-                method_of_moments = (method == "fast")
+                min_depth = min_depth
             )
+        
+        if self.method == "mixture":
+            self.depth_distribution = None
         
         # Step 2: include sites with a non-reference base count > alpha regardless
         # of if these were called as variants according to Pilon
@@ -222,7 +224,7 @@ varying between reference sequences."
             ).join(
                 p_alt.rename("p_alt")
             )
-        
+                
         return self.__add_filter_tag(
             vcf = vcf,
             bias = 0
