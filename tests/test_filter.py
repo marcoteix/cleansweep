@@ -181,7 +181,7 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             rc.returncode,
             0
         )
-
+    
     def test_incomplete_reference(self):
 
         cmd = [
@@ -211,6 +211,197 @@ class TestCleanSweepPrepareCLI(unittest.TestCase):
             rc.returncode,
             0
         )
+
+    def test_freebayes_vcf(self):
+
+        cmd = [
+            "cleansweep",
+            "filter",
+            "tests/data/freebayes/freebayes.vcf.gz",
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_freebayes_vcf"
+                )
+            )
+        ] + opts
+
+        rc = subprocess.run(cmd)
+        
+        # Check that the command returned 0
+        self.assertEqual(
+            rc.returncode,
+            0
+        )
+    
+    def test_uniform_edge_bc_fast(self):
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "uniform_edge_bc.vcf.gz"
+                )
+            ),
+            "tests/data/prepare/uniform_edge_bc.prepare.swp",
+            str(
+                outdir.joinpath(
+                    "test_uniform_edge_bc_fast"
+                )
+            ),
+            "--method", "fast"
+        ] + [
+            x if x != "50" else "150"
+            for x in opts
+        ]
+        rc = subprocess.run(cmd)
+        self.assertEqual(rc.returncode, 0)
+
+    def test_no_shared_regions_fast(self):
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "no_shared_regions.vcf.gz"
+                )
+            ),
+            "tests/data/prepare/no_shared_regions.prepare.swp",
+            str(
+                outdir.joinpath(
+                    "test_no_shared_regions_fast"
+                )
+            ),
+            "--method", "fast"
+        ] + opts
+        rc = subprocess.run(cmd)
+        self.assertEqual(rc.returncode, 0)
+
+    def test_no_background_strain_fast(self):
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "test.vcf.gz"
+                )
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_no_background_strain",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_no_background_strain_fast"
+                )
+            ),
+            "--method", "fast"
+        ] + opts
+        rc = subprocess.run(cmd)
+        self.assertEqual(rc.returncode, 0)
+
+    def test_complete_references_fast(self):
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "test.vcf.gz"
+                )
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_complete_references_fast"
+                )
+            ),
+            "--method", "fast"
+        ] + opts
+        rc = subprocess.run(cmd)
+        self.assertEqual(rc.returncode, 0)
+
+    def test_variants_option_fast(self):
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath(
+                    "test.vcf.gz"
+                )
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_variants_option_fast"
+                )
+            ),
+            "--variants",
+            "--method", "fast"
+        ] + opts
+        rc = subprocess.run(cmd)
+        self.assertEqual(rc.returncode, 0)
+
+    def test_incomplete_reference_fast(self):
+        cmd = [
+            "cleansweep",
+            "filter",
+            str(
+                pilon_dir.joinpath("test.vcf.gz")
+            ),
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_incomplete_references",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_incomplete_references_fast"
+                )
+            ),
+            "--variants",
+            "--method", "fast"
+        ] + opts
+        rc = subprocess.run(cmd)
+        self.assertEqual(rc.returncode, 0)
+
+    def test_freebayes_vcf_fast(self):
+        cmd = [
+            "cleansweep",
+            "filter",
+            "tests/data/freebayes/freebayes.vcf.gz",
+            str(
+                cleansweep_prepare_dir.joinpath(
+                    "test_all_fastas",
+                    "cleansweep.prepare.swp"
+                )
+            ),
+            str(
+                outdir.joinpath(
+                    "test_freebayes_vcf_fast"
+                )
+            ),
+            "--method", "fast"
+        ] + opts
+        rc = subprocess.run(cmd)
+        self.assertEqual(rc.returncode, 0)
 
 if __name__ == '__main__':
     unittest.main()
