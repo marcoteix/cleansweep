@@ -31,12 +31,11 @@ class CollectionCmd(Subcommand):
             "Options for aditional filtering of variants."
         )
 
-        params_grp.add_argument("--alpha", "-a", type=float, default=10.0,
-            help="Sensitivity of the outlier filter. For each sample, if its highest ANI to \
-any other sample is below (median - alpha * IQR) of all pairwise ANIs, variants occurring \
-in no other sample are excluded. Larger values are more permissive. Must be > 0. \
-Defaults to %(default)s.")
-        params_grp.add_argument("--min-coverage", "-c", type=int, default=10,
+        params_grp.add_argument("--min-ani", "-a", type=float, default=0.995, 
+            help="Minimum accepted mean ANI between any sample and every other sample. If \
+a sample has a mean ANI with all other samples less than --min-ani, variants occuring in \
+no other sample are excluded. Defaults to %(default)s.")
+        params_grp.add_argument("--min-coverage", "-c", type=int, default=10, 
             help="Minimum coverage needed for a site to be included. Sites with lower \
 coverage are represented as N in the multi-sequence alignment. Defaults to %(default)s.")
         
@@ -45,21 +44,21 @@ coverage are represented as N in the multi-sequence alignment. Defaults to %(def
         input: List[File],
         output: File,
         tmp_dir: Directory,
-        alpha: float,
+        min_ani: float,
         min_coverage: int,
         **kwargs
     ):
-
+        
         logging.info(
-            f"Merging VCFs {', '.join([str(x) for x in input])} "
-            f"(alpha={alpha}). Writing output to {str(output)}..."
+            f"Merging VCFs {', '.join([str(x) for x in input])} with a minimum \
+ANI of {min_ani}. Writing output to {str(output)}..."
         )
-
+        
         Collection(
             vcfs = input,
             output = output,
             tmp_dir = tmp_dir,
-            alpha = alpha,
+            min_ani = min_ani,
             min_coverage = min_coverage
         ).merge()
         

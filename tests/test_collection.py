@@ -1,3 +1,4 @@
+import logging
 import unittest
 import subprocess
 from pathlib import Path
@@ -31,7 +32,7 @@ class TestCleanSweepCollectionCLI(unittest.TestCase):
             str(
                 outdir.joinpath("tmp")
             ),
-            "--alpha", "10",
+            "-a", "0.998",
             "-c", "10"
         ]
 
