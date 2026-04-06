@@ -17,7 +17,7 @@ class Collection:
     vcfs: List[File]
     output: File
     tmp_dir: Directory
-    min_ani: float = 0.995
+    alpha: float = 10.0
     min_coverage: int = 10
 
     def __post_init__(self):
@@ -29,15 +29,14 @@ class Collection:
                 raise FileNotFoundError(
                     f"VCF {str(vcf)} not found."
                 )
-            
+
         # Create tmp directory
         self.tmp_dir = Path(self.tmp_dir)
         self.tmp_dir.mkdir(exist_ok=True)
 
-        # Check ANI
-        if not self.min_ani >= 0 and self.min_ani <= 1:
+        if self.alpha <= 0:
             raise ValueError(
-                f"Minimum ANI must be between 0 and 1. Got {self.min_ani}."
+                f"alpha must be greater than 0. Got {self.alpha}."
             )
             
     def merge(self):
@@ -62,7 +61,7 @@ class Collection:
 
         vcf = self.merged_vcf_consensus_filter(
             vcf = self.tmp_dir.joinpath("merged.named.vcf"),
-            min_ani = self.min_ani
+            alpha = self.alpha
         )
 
         write_merged_vcf(
@@ -197,9 +196,9 @@ class Collection:
     def merged_vcf_consensus_filter(
         self,
         vcf: File,
-        min_ani: float = 0.995
+        alpha: float = 10.0
     ) -> pd.DataFrame:
-        
+
         # Read VCF
         vcf_df = VCF(vcf).read(
             chrom = None,
@@ -221,34 +220,46 @@ class Collection:
         )[vcf_df.columns.difference(_VCF_HEADER)] \
         .astype(str)
 
-        # Compute SNP matrix with all sites
+        # Compute pairwise SNP matrix and convert to ANI
         full_snp_matrix = self.snp_matrix(genotype)
+        ani_matrix = 1.0 - full_snp_matrix / genome_length
 
-        # Get core SNPs (>1 sample) and compute SNP matrix
-        core_snps, is_core = self.core_snps(genotype)
-        core_snp_matrix = self.snp_matrix(core_snps)
+        # Compute median and IQR of all pairwise ANIs (upper triangle)
+        n = len(ani_matrix)
+        pairwise_anis = ani_matrix.values[np.triu_indices(n, k=1)]
 
-        # Check Spearman correlation between the full and core SNP distances
-        # for each sample. If they are not correlated, use the core SNPs
-        for (
-            (sample_name, full_distances),
-            (_, core_distances) 
-        ) in zip(
-            full_snp_matrix.iterrows(),
-            core_snp_matrix.iterrows()
-        ):
+        if len(pairwise_anis) == 0:
+            # Single sample — no filtering possible
+            vcf_df = vcf_df.assign(pos=vcf_df.pos.astype("Int64"))
+            return vcf_df
 
-            if self.use_core(
-                full_distances.drop(sample_name),
-                genome_length,
-                min_ani
-            ):
-                
+        ani_median = float(np.median(pairwise_anis))
+        ani_iqr = float(np.percentile(pairwise_anis, 75) - np.percentile(pairwise_anis, 25))
+        threshold = ani_median - ani_iqr * alpha
+
+        logging.debug(
+            f"Pairwise ANI summary: median={ani_median:.6f}, IQR={ani_iqr:.6f}, "
+            f"threshold (median - {alpha}*IQR)={threshold:.6f}"
+        )
+
+        # Get core SNPs once — reused for every sample that triggers filtering
+        _, is_core = self.core_snps(genotype)
+
+        for sample_name in ani_matrix.index:
+
+            # Highest ANI this sample shares with any other sample
+            max_ani = float(ani_matrix.loc[sample_name].drop(sample_name).max())
+
+            if max_ani < threshold:
+
                 logging.warning(
-                    f"Estimated ANI for {sample_name} is lower than {min_ani}. Removing non-core SNPs."
+                    f"Sample {sample_name} has a maximum ANI of {max_ani:.6f} to any other "
+                    f"sample, below the threshold of {threshold:.6f} "
+                    f"(median={ani_median:.6f}, IQR={ani_iqr:.6f}, alpha={alpha}). "
+                    f"Removing non-core SNPs."
                 )
-                                
-                # Replace genotype with core
+
+                # Replace non-core genotypes with per-site consensus
                 genotype = genotype.assign(
                     **{
                         sample_name: genotype[sample_name] \
@@ -268,32 +279,18 @@ class Collection:
                 )
 
         vcf_df = genotype.join(
-                vcf_df[
-                    vcf_df.columns.intersection(_VCF_HEADER)
-                ].set_index(
-                    ["chrom", "pos"]
-                )
-            ).reset_index()[vcf_df.columns]
-        
+            vcf_df[
+                vcf_df.columns.intersection(_VCF_HEADER)
+            ].set_index(
+                ["chrom", "pos"]
+            )
+        ).reset_index()[vcf_df.columns]
+
         vcf_df = vcf_df.assign(
             pos = vcf_df.pos.astype("Int64")
         )
 
         return vcf_df
-    
-    def use_core(
-        self,
-        full_distances: pd.Series,
-        genome_length: int,
-        min_ani: float = 0.995
-    ) -> bool:
-        
-        # Estimate ANI
-        ani = 1 - (
-            full_distances.mean()/genome_length
-        )
-
-        return ani < min_ani
     
     def genome_lengths_from_vcf(
         self,
