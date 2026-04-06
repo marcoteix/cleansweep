@@ -61,8 +61,7 @@ class Inspector:
         cleansweep: VCFFilter
     ) -> dict:
         
-        attrs = {
-            "Fitting method": cleansweep.method, 
+        return {
             "Random seed": cleansweep.random_state,
             "Estimated mean query depth of coverage": cleansweep.query_coverage,
             "Estimated overdispersion for the query depths of coverage (query_overdispersion) \
@@ -75,17 +74,6 @@ and probability of a variant being true (alt_prob)": cleansweep.basecount_filter
                 "Number of threads": cleansweep.basecount_filter.threads
             }
         }
-
-        if hasattr(
-            cleansweep.coverage_estimator,
-            "p"
-        ):
-            attrs["Fast fitting Negative Binomial parameters"] = {
-                "r": cleansweep.coverage_estimator.r,
-                "p": cleansweep.coverage_estimator.p
-            }
-
-        return attrs
     
     def report(
         self,
