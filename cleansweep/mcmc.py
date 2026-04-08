@@ -10,6 +10,7 @@ import logging
 import pytensor
 import platform
 from warnings import warn
+from scipy.stats import rv_discrete
 
 # Fix compiler stuff for pymc
 if platform.system() == "Darwin":
@@ -355,6 +356,49 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                 "alt_prob"
             ]
         }
+    
+    def fit_fast(
+        self,
+        vcf: pd.DataFrame,
+        distribution: rv_discrete
+    ) -> pd.Series:
+        
+        # Compute the likelihood ratio between alt and reference alleles
+        alt_logp = np.nan_to_num(
+            distribution.logpmf(vcf.alt_bc),
+            nan = -1e10,
+            neginf = -1e10,
+            posinf = 1e10
+        )
+
+        ref_logp = np.nan_to_num(
+            distribution.logpmf(vcf.ref_bc),
+            nan = -1e10,
+            neginf = -1e10,
+            posinf = 1e10
+        )
+        
+        ll_ratio = pd.Series(
+            alt_logp - ref_logp,
+            index = vcf.index,
+            name = "ll_ratio"
+        )
+
+        # Exclude outlying alt allele depths
+        alternate_cdf = pd.Series(
+            distribution.cdf(vcf.alt_bc),
+            name = "cdf",
+            index = vcf.index
+        )
+
+        alt_evidence = (
+            alternate_cdf.gt(self.__quantiles[0]) & \
+            alternate_cdf.lt(self.__quantiles[1])
+        )
+
+        ll_ratio[~alt_evidence] = -1
+
+        return ll_ratio
 
     def fit(
         self, 
