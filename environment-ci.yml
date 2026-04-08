@@ -1,0 +1,16 @@
+name: cleansweep-ci
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - bcftools>=1.18
+  - htslib
+  - pysam
+  - numpy
+  - scipy
+  - pandas
+  - joblib
+  - biopython
+  - pytest
+  - pytest-timeout
