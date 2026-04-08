@@ -1,5 +1,5 @@
 #%%
-from typing import Union
+from typing import Literal, Union
 import numpy as np
 import pymc as pm
 from pymc.exceptions import SamplingError
@@ -15,7 +15,6 @@ from scipy.stats import rv_discrete
 # Fix compiler stuff for pymc
 if platform.system() == "Darwin":
     pytensor.config.cxx = '/usr/bin/clang++'
-
 
 @dataclass
 class BaseCountFilter:
@@ -356,7 +355,7 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                 "alt_prob"
             ]
         }
-    
+
     def fit_fast(
         self,
         vcf: pd.DataFrame,
@@ -399,25 +398,58 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
         ll_ratio[~alt_evidence] = -1
 
         return ll_ratio
-
+    
     def fit(
         self, 
         vcf: pd.DataFrame, 
         query_coverage_estimate: float,
-        downsampling: Union[int, float] = 1.0        
+        downsampling: Union[int, float] = 1.0,
+        method: Literal["mixture", "fast"] = "mixture",
+        distribution: Union[rv_discrete, None] = None        
     ) -> pd.Series:
+        
+        logging.debug(f"Using method \"{method}\" in BaseCountFilter.fit().")
+        
+        if method == "fast":
 
-        # Probability of the query having the alternate allele, given the alternate allele base count
-        self.prob = self.fit_mcmc(
-            vcf,
-            query_coverage_estimate = query_coverage_estimate,
-            downsampling = downsampling
-        )
+            if distribution is None:
 
-        logging.info(
-            f"Estimated parameters for the distribution of depths of coverage for the query strain and \
-alleles in the query strain: {'; '.join([k+': '+str(v) for k,v in self.dist_params.items()])}."
-        )
+                msg = f"Method was set to \"fast\" but no distribution was provided."
+                logging.error(msg)
+                raise ValueError(msg)
+
+        # Probability of the query having the alternate allele, given the alternate 
+        # and reference allele base counts
+        if method == "mixture":
+            # Use MCMC sampling to fit a Negative Binomial distribution to
+            # possible variants
+
+            self.prob = self.fit_mcmc(
+                vcf,
+                query_coverage_estimate = query_coverage_estimate,
+                downsampling = downsampling
+            )
+
+            logging.info(
+                f"Estimated parameters for the distribution of depths of coverage for \
+the query strain and alleles in the query strain: \
+{'; '.join([k+': '+str(v) for k,v in self.dist_params.items()])}."
+            )
+
+        elif method == "fast":
+            # Compute the likelihood ratio for alternate and reference allele depths,
+            # given a distribution fitted from unaligned regions in the target strain
+
+            self.prob = self.fit_fast(
+                vcf = vcf,
+                distribution = distribution
+            )
+
+        else:
+
+            msg = f"Got unknown method \"{method}\". Must be one of \"mixture\" or \"fast\"."
+            logging.error(msg)
+            raise ValueError(msg)
 
         return self.prob
 
@@ -429,13 +461,17 @@ alleles in the query strain: {'; '.join([k+': '+str(v) for k,v in self.dist_para
         self, 
         vcf: pd.DataFrame, 
         query_coverage_estimate: float, 
-        downsampling: Union[int, float] = 1.0
+        downsampling: Union[int, float] = 1.0,
+        method: Literal["mixture", "fast"] = "mixture",
+        distribution: Union[rv_discrete, None] = None    
     ) -> pd.DataFrame:
 
         self.fit(
             vcf = vcf,
             query_coverage_estimate = query_coverage_estimate,
-            downsampling = downsampling
+            downsampling = downsampling,
+            method = method,
+            distribution = distribution
         )
         return self.filter(vcf)
 
