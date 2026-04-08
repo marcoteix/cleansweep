@@ -21,10 +21,11 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Get the release version
-      # i.e.: release/1.0.0 -> 1.0.0
+      # Strips refs/heads/ or refs/tags/ prefix, then replaces characters
+      # invalid in Docker image tags (e.g. slashes) with hyphens.
       id: strip-branch-name
       run: |
-        release_version=$(echo "${{ github.ref }}" | sed 's/refs\/heads\/*\///')
+        release_version=$(echo "${{ github.ref }}" | sed 's|refs/\(heads\|tags\)/||' | sed 's/[^a-zA-Z0-9._-]/-/g')
         echo "Building release version $release_version"
         echo "RELEASE_VERSION=$release_version" >> $GITHUB_ENV
       shell: bash
