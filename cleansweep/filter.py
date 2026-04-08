@@ -1,6 +1,6 @@
 #%%
 from dataclasses import dataclass
-from typing import Union
+from typing import Literal, Union
 import numpy as np
 from cleansweep.coverage import CoverageEstimator
 from cleansweep.io import FilePath
@@ -69,7 +69,8 @@ class VCFFilter:
         power: float = 0.975,
         threads: int = 5,
         engine: str = "pymc",
-        overdispersion_bias: int = 1
+        overdispersion_bias: int = 1,
+        method: Literal["fast", "mcmc"] = "mcmc"
     ) -> pd.Series:   
     
         # Step 1: estimate the coverage of the background strain

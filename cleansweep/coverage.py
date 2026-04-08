@@ -11,6 +11,7 @@ from cleansweep.vcf import VCF, get_info_value
 from cleansweep.typing import File
 from warnings import warn
 from scipy import stats as sps
+from scipy.stats import rv_continuous, multivariate_normal, norm
 from scipy.optimize import minimize
 from scipy.special import gammaln
 from numpy.typing import ArrayLike
@@ -167,7 +168,7 @@ class CoverageEstimator:
             f"Downsampling {str(vcf)} to {n_lines} lines..."
         )
                 
-        vcf_df = self.downsample_vcf(
+        vcf_df = self.downsample_vcf_depths(
             vcf = vcf,
             query = query,
             gaps = gaps,
