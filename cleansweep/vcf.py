@@ -296,11 +296,11 @@ def format_vcf_header(
             "##FILTER=<ID=FAIL,Description=\"Alternate allele depth does not match the overall depth of coverage\">",
             "##FILTER=<ID=LowAltBC,Description=\"Alternate allele depth is too low\">",
             "##FILTER=<ID=LowCov,Description=\"Coverage is too low\">",
-            "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon FILTER flag\">",
+            "##INFO=<ID=BC,Number=4,Type=Integer,Description=\"Base counts\">",
+            "##INFO=<ID=ORGFILT,Number=1,Type=String,Description=\"Original FILTER flag in the input VCF\">",
             "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
             "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
             "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">",
-            "##INFO=<ID=LowCov,Type=String,Description=\"Coverage is too low\">"
         ]
         if add_filters
         else []
@@ -373,15 +373,21 @@ def write_vcf(
                         ) else "."
                     ),
                     "RD=" + (
-                        str(x.ref_bc)
-                        if "ref_bc" in vcf 
-                        else "."
+                        str(int(x.ref_bc))
+                        if (
+                            "ref_bc" in x and \
+                            not pd.isna(x["ref_bc"]) and \
+                            not x["ref_bc"] is None
+                        ) else "."
                     ),
                     "AD=" + (
-                        str(x.alt_bc)
-                        if "alt_bc" in vcf 
-                        else "."
-                    ),                    
+                        str(int(x.alt_bc))
+                        if (
+                            "alt_bc" in x and \
+                            not pd.isna(x["alt_bc"]) and \
+                            not x["alt_bc"] is None
+                        ) else "."
+                    ),
                 ]
             ),
             axis = 1

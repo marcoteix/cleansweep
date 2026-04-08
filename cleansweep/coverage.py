@@ -10,7 +10,9 @@ from typing import List, Tuple, Union, Collection, Callable, Any
 from cleansweep.vcf import VCF, get_info_value
 from cleansweep.typing import File
 from warnings import warn
-from scipy.stats import norm, multivariate_normal, poisson, rv_continuous
+from scipy import stats as sps
+from scipy.optimize import minimize
+from scipy.special import gammaln
 from numpy.typing import ArrayLike
 from dataclasses import dataclass
 import subprocess
@@ -194,82 +196,65 @@ class CoverageEstimator:
     def estimate(
         self,
         depths: ArrayLike,
+        use_mle: bool = False,
         **kwargs
-    ) -> Tuple[float, float]:
-        
-        return np.median(depths), None
-    
-    def __estimate_deprecated(
+    ) -> Tuple[float, Union[None, sps.rv_discrete]]:
+
+        dist = None
+
+        if use_mle:
+            r, p = self._fit_nbinom_mle(depths)
+            logging.debug(f"NB MLE estimates: r = {r:.4f}, p = {p:.4f}")
+            dist = sps.nbinom(r, p)
+            self.r = r
+            self.p = p
+
+        return np.median(depths), dist
+
+    def _fit_nbinom_mle(
         self,
-        depths: ArrayLike,
-        **kwargs
+        depths: ArrayLike
     ) -> Tuple[float, float]:
-        
-        # Z-scale depths 
-        self.scaler = StandardScaler()
-        scaled_depths = self.scaler \
-            .fit_transform(
-                depths.reshape(-1, 1)
+        """Fit Negative Binomial(r, p) parameters by maximum likelihood.
+
+        Uses a reparametrisation (log r, logit p) so that L-BFGS-B optimises
+        over an unconstrained space, guaranteeing r > 0 and 0 < p < 1
+        regardless of the data variance.
+        """
+        depths = np.asarray(depths, dtype=float)
+
+        def neg_log_likelihood(params: np.ndarray) -> float:
+            r = np.exp(params[0])
+            p = 1.0 / (1.0 + np.exp(-params[1]))
+            ll = (
+                gammaln(depths + r) - gammaln(r)
+                + r * np.log(p) + depths * np.log1p(-p)
+            ).sum()
+            return -ll
+
+        # Initialise from MoM, clamped to a valid range
+        mean = float(np.mean(depths))
+        var  = float(np.var(depths))
+        r0   = max(mean ** 2 / max(var - mean, mean * 0.01), 1e-3)
+        p0   = np.clip(mean / max(var, mean + 1e-6), 1e-6, 1.0 - 1e-6)
+
+        result = minimize(
+            neg_log_likelihood,
+            x0 = [np.log(r0), np.log(p0 / (1.0 - p0))],
+            method = "L-BFGS-B"
+        )
+
+        if not result.success:
+            logging.warning(
+                f"NB MLE optimisation did not fully converge: {result.message}. "
+                "Using best iterate found."
             )
-        
-        initial_means = self.scaler.transform(
-            np.array(
-                [1, np.max(depths)]
-            ).reshape(-1, 1)
-        )
 
-        # Fit 5-component GMM
+        r = float(np.exp(result.x[0]))
+        p = float(1.0 / (1.0 + np.exp(-result.x[1])))
+        return r, p
 
-        logging.debug("Fitting 5-component DPMM...")
-
-        self.gmm = BayesianGaussianMixture(
-            n_components = 5,
-            random_state = self.random_state,
-            weight_concentration_prior = 1e-5,
-            max_iter = 10000,
-            **kwargs
-        )
-        self.gmm.fit(scaled_depths)
-
-        # Set the lowest component mean as the estimated depth of coverage
-        mean_coverage = np.min(self.gmm.means_)
-
-        # Re-scale means for logging
-        rescaled_means = self.scaler \
-            .inverse_transform(
-                self.gmm.means_
-            ).flatten() \
-            .astype(str)
-        
-        logging.debug(
-            f"Estimated component means: {', '.join(rescaled_means)}."
-        )
-
-        # Set the background coverage as the mean of the component with the most
-        # weight, excluding the component assigned to the "true" coverage
-        idx_max = np.argmax(
-            self.gmm.weight_concentration_[0][
-                self.gmm.means_.flatten() != mean_coverage
-            ]
-        )
-        background_coverage = self.gmm.means_ \
-            .flatten()[ 
-                self.gmm.means_ \
-                    .flatten() != mean_coverage
-            ][idx_max]
-        
-        # Re-scale back
-        mean_coverage = self.scaler \
-            .inverse_transform([[mean_coverage]])[0,0]
-        
-        background_coverage = self.scaler \
-            .inverse_transform([[background_coverage]])[0,0]
-        
-        logging.debug(f"Estimated mean depth of coverage: {mean_coverage}.")
-        
-        return mean_coverage, background_coverage
-
-    def downsample_vcf(
+    def downsample_vcf_depths(
         self,
         vcf: File,
         query: str,

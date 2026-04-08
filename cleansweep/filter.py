@@ -86,7 +86,8 @@ class VCFFilter:
                 query = query,
                 gaps = gaps,
                 n_lines = n_coverage_sites,
-                min_depth = min_depth
+                min_depth = min_depth,
+                use_mle = (method == "fast")
             )
         
         # Step 2: include sites with a non-reference base count > alpha regardless
@@ -186,7 +187,7 @@ reference sequences."
             ).join(
                 p_alt.rename("p_alt")
             )
-        
+                
         return self.__add_filter_tag(
             vcf = vcf,
             bias = 0
