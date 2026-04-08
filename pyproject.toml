@@ -15,3 +15,8 @@ cleansweep = "cleansweep.main:main"
 
 [project.urls]
 Home = "https://github.com/marcoteix/cleansweep"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
+addopts = "-v"

@@ -103,11 +103,9 @@ strain based on unaligned regions and the method of moments)."
                 query = query,
                 gaps = gaps,
                 n_lines = n_coverage_sites,
-                min_depth = min_depth
+                min_depth = min_depth,
+                use_mle = (method == "fast")
             )
-        
-        if self.method == "mixture":
-            self.depth_distribution = None
         
         # Step 2: include sites with a non-reference base count > alpha regardless
         # of if these were called as variants according to Pilon

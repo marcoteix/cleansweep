@@ -1,47 +1,31 @@
-import unittest
+"""Integration tests for `cleansweep collection` CLI."""
 import subprocess
-from pathlib import Path
 
-# Path to test files
-data_dir = Path("tests/data/collection")
 
-# Output directory
-outdir = Path("tests/outputs/collection")
-outdir.mkdir(
-    parents = True,
-    exist_ok = True
-)
+class TestCollectionCLI:
 
-class TestCleanSweepCollectionCLI(unittest.TestCase):
+    _base_opts = ["--alpha", "10", "-c", "5"]
 
-    def test_full_vcf(self):
-
+    def test_returns_zero(self, synthetic_collection_vcfs, tmp_path):
+        vcf_a, vcf_b = synthetic_collection_vcfs
         cmd = [
-            "cleansweep",
-            "collection"
-        ] + [
-            str(x) 
-            for x in data_dir.glob("test*.full.vcf.gz")
-        ] + [
-            "--output",
-            str(
-                outdir.joinpath("test_full_vcf.vcf")
-            ),
-            "--tmp-dir",
-            str(
-                outdir.joinpath("tmp")
-            ),
-            "--alpha", "10",
-            "-c", "10"
-        ]
+            "cleansweep", "collection",
+            str(vcf_a), str(vcf_b),
+            "--output", str(tmp_path / "merged.vcf"),
+            "--tmp-dir", str(tmp_path / "tmp"),
+        ] + self._base_opts
+        rc = subprocess.run(cmd, capture_output=True)
+        assert rc.returncode == 0, rc.stderr.decode()
 
-        rc = subprocess.run(cmd)
-        
-        # Check that the command returned 0
-        self.assertEqual(
-            rc.returncode,
-            0
-        )
-
-if __name__ == '__main__':
-    unittest.main()
+    def test_creates_nonempty_output_vcf(self, synthetic_collection_vcfs, tmp_path):
+        vcf_a, vcf_b = synthetic_collection_vcfs
+        output = tmp_path / "merged2.vcf"
+        cmd = [
+            "cleansweep", "collection",
+            str(vcf_a), str(vcf_b),
+            "--output", str(output),
+            "--tmp-dir", str(tmp_path / "tmp2"),
+        ] + self._base_opts
+        subprocess.run(cmd, capture_output=True, check=True)
+        assert output.exists()
+        assert output.stat().st_size > 0

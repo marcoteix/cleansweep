@@ -4,6 +4,8 @@ from typing import Tuple, Union
 from cleansweep.typing import File
 from warnings import warn
 from scipy import stats as sps
+from scipy.optimize import minimize
+from scipy.special import gammaln
 from numpy.typing import ArrayLike
 from dataclasses import dataclass
 import logging
@@ -86,21 +88,63 @@ depths of coverage."
     def estimate(
         self,
         depths: ArrayLike,
+        use_mle: bool = False,
         **kwargs
     ) -> Tuple[float, Union[None, sps.rv_discrete]]:
-        
+
         dist = None
-        
-        # Fit a Negative Binomial distribution to the data using MLE
-        r, p = self._fit_nbinom_mle(depths)
 
-        logging.debug(f"NB MLE estimates: r = {r:.4f}, p = {p:.4f}")
-
-        dist = sps.nbinom(r, p)
-        self.r = r
-        self.p = p
+        if use_mle:
+            r, p = self._fit_nbinom_mle(depths)
+            logging.debug(f"NB MLE estimates: r = {r:.4f}, p = {p:.4f}")
+            dist = sps.nbinom(r, p)
+            self.r = r
+            self.p = p
 
         return np.median(depths), dist
+
+    def _fit_nbinom_mle(
+        self,
+        depths: ArrayLike
+    ) -> Tuple[float, float]:
+        """Fit Negative Binomial(r, p) parameters by maximum likelihood.
+
+        Uses a reparametrisation (log r, logit p) so that L-BFGS-B optimises
+        over an unconstrained space, guaranteeing r > 0 and 0 < p < 1
+        regardless of the data variance.
+        """
+        depths = np.asarray(depths, dtype=float)
+
+        def neg_log_likelihood(params: np.ndarray) -> float:
+            r = np.exp(params[0])
+            p = 1.0 / (1.0 + np.exp(-params[1]))
+            ll = (
+                gammaln(depths + r) - gammaln(r)
+                + r * np.log(p) + depths * np.log1p(-p)
+            ).sum()
+            return -ll
+
+        # Initialise from MoM, clamped to a valid range
+        mean = float(np.mean(depths))
+        var  = float(np.var(depths))
+        r0   = max(mean ** 2 / max(var - mean, mean * 0.01), 1e-3)
+        p0   = np.clip(mean / max(var, mean + 1e-6), 1e-6, 1.0 - 1e-6)
+
+        result = minimize(
+            neg_log_likelihood,
+            x0 = [np.log(r0), np.log(p0 / (1.0 - p0))],
+            method = "L-BFGS-B"
+        )
+
+        if not result.success:
+            logging.warning(
+                f"NB MLE optimisation did not fully converge: {result.message}. "
+                "Using best iterate found."
+            )
+
+        r = float(np.exp(result.x[0]))
+        p = float(1.0 / (1.0 + np.exp(-result.x[1])))
+        return r, p
 
     def downsample_vcf_depths(
         self,

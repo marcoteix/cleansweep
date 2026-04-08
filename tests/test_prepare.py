@@ -1,6 +1,13 @@
+import shutil
 import unittest
 import subprocess
 from pathlib import Path
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("nucmer") is None,
+    reason="nucmer not available in this environment"
+)
 
 # Path to test files
 references_dir = Path("tests/data/references")
