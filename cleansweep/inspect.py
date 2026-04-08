@@ -1,8 +1,9 @@
-from dataclasses import dataclass 
+from dataclasses import dataclass
 from cleansweep.filter import VCFFilter
 from cleansweep.typing import File
 import joblib
 import pandas as pd
+from scipy import stats as sps
 
 @dataclass
 class Inspector:
@@ -60,30 +61,45 @@ class Inspector:
         self,
         cleansweep: VCFFilter
     ) -> dict:
-        
+
         attrs = {
-            "Fitting method": cleansweep.method, 
+            "Fitting method": cleansweep.method,
             "Random seed": cleansweep.random_state,
             "Estimated mean query depth of coverage": cleansweep.query_coverage,
-            "Estimated overdispersion for the query depths of coverage (query_overdispersion) \
-and probability of a variant being true (alt_prob)": cleansweep.basecount_filter.dist_params,
-            "MCMC options": {
+        }
+
+        # Derive NB r/p from whichever method was used
+        if cleansweep.method == "fast":
+            r = cleansweep.coverage_estimator.r
+            p = cleansweep.coverage_estimator.p
+        else:
+            # mixture: pyMC parametrises NB as (mu, alpha).
+            # scipy parametrises as (n, p) with n = alpha, p = alpha/(alpha+mu)
+            alpha = cleansweep.basecount_filter.dist_params["query_overdispersion"]
+            mu = cleansweep.query_coverage
+            r = alpha
+            p = alpha / (alpha + mu)
+
+            attrs["Estimated overdispersion for the query depths of coverage "
+                  "(query_overdispersion) and probability of a variant being "
+                  "true (alt_prob)"] = cleansweep.basecount_filter.dist_params
+            attrs["MCMC options"] = {
                 "Number of chains": cleansweep.basecount_filter.chains,
                 "Number of draws per chain": cleansweep.basecount_filter.draws,
                 "Number of burn-in draws per chain": cleansweep.basecount_filter.burn_in,
                 "Engine": cleansweep.basecount_filter.engine,
                 "Number of threads": cleansweep.basecount_filter.threads
             }
-        }
 
-        if hasattr(
-            cleansweep.coverage_estimator,
-            "p"
-        ):
-            attrs["Fast fitting Negative Binomial parameters"] = {
-                "r": cleansweep.coverage_estimator.r,
-                "p": cleansweep.coverage_estimator.p
-            }
+        dist = sps.nbinom(r, p)
+        attrs["Negative Binomial parameters"] = {
+            "r": r,
+            "p": p,
+            "mean": float(dist.mean()),
+            "std": float(dist.std()),
+            "percentile_2.5": float(dist.ppf(0.025)),
+            "percentile_97.5": float(dist.ppf(0.975)),
+        }
 
         return attrs
     

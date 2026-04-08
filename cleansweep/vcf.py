@@ -407,7 +407,6 @@ def format_vcf_header(
             "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
             "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
             "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">",
-            "##INFO=<ID=LowCov,Type=String,Description=\"Coverage is too low\">"
         ]
         if add_filters
         else []
