@@ -70,7 +70,7 @@ class VCFFilter:
         threads: int = 5,
         engine: str = "pymc",
         overdispersion_bias: int = 1,
-        method: Literal["fast", "mcmc"] = "mcmc"
+        method: Literal["fast", "mixture"] = "mixture"
     ) -> pd.Series:   
     
         # Step 1: estimate the coverage of the background strain

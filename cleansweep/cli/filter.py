@@ -38,9 +38,9 @@ Ranges from 0 (errors) to 4 (debug). Defaults to %(default)s.", default=1)
         )
 
         params_grp.add_argument("--method", "-m", type=str, default="mcmc", 
-            choices=["fast", "mcmc"], help="Method used to fit the CleanSweep filters. If \"fast\", " 
+            choices=["fast", "mixture"], help="Method used to fit the CleanSweep filters. If \"fast\", " 
             "uses the maximum likelihood estimators based on the unique regions of the target strain "
-            "for the distribution of depth of coverage. If \"mcmc\", uses MCMC sampling to estimate "
+            "for the distribution of depth of coverage. If \"mixture\", uses MCMC sampling to estimate "
             "these parameters, based on candidate variants in the VCF file. Defaults to %(default)s.")
         params_grp.add_argument("--min-depth", "-dp", type=int, default=5, help="Minimum depth of coverage \
 for a site to be considered when filtering SNPs. SNPs at sites with fewer than this number of reads \
@@ -102,7 +102,7 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         output: Directory,
         overdispersion_bias: int,
         variants: bool,
-        method: Literal["fast", "mcmc"],
+        method: Literal["fast", "mixture"],
         **kwargs
     ):
         
