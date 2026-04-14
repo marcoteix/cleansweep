@@ -104,7 +104,7 @@ SNVs trully present in the target strain will have a value of ``PASS`` in the ``
 
 ### Further filtering for a collection of samples 
 
-If you have run `cleansweep filter` on multiple plate swipes targeting the same strain, you can merge the resulting VCFs into a single multi-sample VCF with `cleansweep collection`. This step also removes sample-private variants from samples that are outliers in terms of pairwise ANI — i.e., samples that are unexpectedly dissimilar from all others, which may indicate insufficient filtering with `cleansweep filter`.
+If you have run `cleansweep filter` on multiple plate swipes targeting the same strain, you can merge the resulting VCFs into a single multi-sample VCF with `cleansweep collection`. This step also removes sample-private variants from samples that are outliers in terms of ANI — i.e., samples that are unexpectedly dissimilar from all others, which may indicate insufficient filtering with `cleansweep filter`.
 
 ```
 cleansweep collection \
@@ -119,8 +119,8 @@ cleansweep collection \
 
 **How the outlier filter works:**
 
-1. All pairwise average nucleotide identities (ANIs) between samples are estimated from the SNP distances in the merged VCF.
-2. The median and interquartile range (IQR) of these pairwise ANIs are computed.
+1. For each sample in the merged VCF, CleanSweep computes the maximum ANI to other samples in the dataset. This results in a distribution of ANIs to the most similar sample in the dataset.
+2. The median and interquartile range (IQR) of these ANIs are computed.
 3. For each sample, the highest ANI it shares with any other sample is checked.
 4. If that maximum ANI falls below `median - alpha × IQR`, the sample is flagged as a divergent outlier and its sample-private variants (i.e., variants that only occur in that sample and not in any other sample in the dataset) are replaced with the per-site consensus of the remaining samples.
 
