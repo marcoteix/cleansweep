@@ -50,7 +50,7 @@ coverage are represented as N in the multi-sequence alignment. Defaults to %(def
         **kwargs
     ):
         
-        logging.info(
+        print(
             f"Merging VCFs {', '.join([str(x) for x in input])} "
             f"(alpha={alpha}). Writing output to {str(output)}..."
         )

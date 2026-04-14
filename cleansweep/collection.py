@@ -116,7 +116,7 @@ class Collection:
                 str(vcf)
             ]
 
-            logging.debug(f"Running command \"" + " ".join(command) + "\"...")
+            print(f"Running command \"" + " ".join(command) + "\"...")
 
             rc = subprocess.run(command, capture_output=True)
 
@@ -237,7 +237,7 @@ class Collection:
         ani_iqr = float(np.percentile(pairwise_anis, 75) - np.percentile(pairwise_anis, 25))
         threshold = ani_median - ani_iqr * alpha
 
-        logging.debug(
+        print(
             f"Pairwise ANI summary: median={ani_median:.6f}, IQR={ani_iqr:.6f}, "
             f"threshold (median - {alpha}*IQR)={threshold:.6f}"
         )
@@ -251,8 +251,8 @@ class Collection:
             max_ani = float(ani_matrix.loc[sample_name].drop(sample_name).max())
 
             if max_ani < threshold:
-                
-                logging.warning(
+
+                print(
                     f"Sample {sample_name} has a maximum ANI of {max_ani:.6f} to any other "
                     f"sample, below the threshold of {threshold:.6f} "
                     f"(median={ani_median:.6f}, IQR={ani_iqr:.6f}, alpha={alpha}). "
@@ -382,12 +382,12 @@ class Collection:
         
         if rc.returncode != 0:
             message = message + f" Got return code {rc.returncode}. Command: \'{' '.join(command)}\'."
-            logging.error(message)
-            logging.error("stout dump:")
-            logging.error(rc.stdout)
+            print(message)
+            print("stout dump:")
+            print(rc.stdout)
             raise RuntimeError(message)
         else:
-            logging.debug("Command successful!")
-        
+            print("Command successful!")
+
 
 # %%
