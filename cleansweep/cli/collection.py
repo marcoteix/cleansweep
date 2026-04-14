@@ -32,10 +32,12 @@ class CollectionCmd(Subcommand):
         )
 
         params_grp.add_argument("--alpha", "-a", type=float, default=10.0,
-            help="Sensitivity of the outlier filter. For each sample, if its highest ANI to \
-any other sample is below (median - alpha * IQR) of all pairwise ANIs, variants occurring \
-in no other sample are excluded. Larger values are more permissive. Must be > 0. \
-Defaults to %(default)s.")
+            help="Sensitivity of the outlier filter. For each sample, CleanSweep computes "
+            "the highest ANI it shares with any other sample, creating a distribution of "
+            "maximum ANIs. If this value is an outlier - below (median - alpha * IQR) of "
+            "all maximum ANIs - , variants occurring in no other sample are excluded. Larger "
+            "values are more permissive. Must be > 0. Defaults to %(default)s.")
+        
         params_grp.add_argument("--min-coverage", "-c", type=int, default=10, 
             help="Minimum coverage needed for a site to be included. Sites with lower \
 coverage are represented as N in the multi-sequence alignment. Defaults to %(default)s.")

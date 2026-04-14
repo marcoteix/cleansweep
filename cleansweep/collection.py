@@ -199,6 +199,8 @@ class Collection:
         alpha: float = 10.0
     ) -> pd.DataFrame:
         
+        print("Applying consensus filter to merged VCF...")
+        
         # Read VCF
         vcf_df = VCF(vcf).read(
             chrom = None,
@@ -224,21 +226,34 @@ class Collection:
         full_snp_matrix = self.snp_matrix(genotype)
         ani_matrix = 1.0 - full_snp_matrix / genome_length
 
-        # Compute median and IQR of all pairwise ANIs (upper triangle)
-        n = len(ani_matrix)
-        pairwise_anis = ani_matrix.values[np.triu_indices(n, k=1)]
+        # Get the maximum ANI each sample shares with any other sample
+        # (ANI to the most closely related sample)
+        max_ani_per_sample = ani_matrix \
+            .stack() \
+            .to_frame() \
+            .reset_index() \
+            .rename(
+                columns = {
+                    "level_0": "sample_1",
+                    "level_1": "sample_2",
+                    0: "ani"
+                }
+            ).loc[ 
+                lambda x: x.sample_1.ne(x.sample_2)
+            ].groupby("sample_1").ani.max()
 
-        if len(pairwise_anis) == 0:
+        # Compute median and IQR
+        if len(max_ani_per_sample) < 2:
             # Single sample — no filtering possible
             vcf_df = vcf_df.assign(pos=vcf_df.pos.astype("Int64"))
             return vcf_df
 
-        ani_median = float(np.median(pairwise_anis))
-        ani_iqr = float(np.percentile(pairwise_anis, 75) - np.percentile(pairwise_anis, 25))
+        ani_median = float(np.median(max_ani_per_sample))
+        ani_iqr = float(np.percentile(max_ani_per_sample, 75) - np.percentile(max_ani_per_sample, 25))
         threshold = ani_median - ani_iqr * alpha
 
         print(
-            f"Pairwise ANI summary: median={ani_median:.6f}, IQR={ani_iqr:.6f}, "
+            f"Maximum ANI summary: median={ani_median:.6f}, IQR={ani_iqr:.6f}, "
             f"threshold (median - {alpha}*IQR)={threshold:.6f}"
         )
 
@@ -248,7 +263,9 @@ class Collection:
         for sample_name in ani_matrix.index:
 
             # Highest ANI this sample shares with any other sample
-            max_ani = float(ani_matrix.loc[sample_name].drop(sample_name).max())
+            max_ani = float(
+                max_ani_per_sample.loc[sample_name]
+            )
 
             if max_ani < threshold:
 
