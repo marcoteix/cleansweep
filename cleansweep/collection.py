@@ -214,12 +214,19 @@ class Collection:
         )
 
         # Subset genotype columns
+        genotype_columns = vcf_df.columns.difference(_VCF_HEADER)
+
+        print(
+            f"Found {len(genotype_columns)} samples in merged VCF: "
+            f"{', '.join(genotype_columns)}."
+        )
+        
         genotype = vcf_df.set_index(
             [
                 "chrom",
                 "pos"
             ]
-        )[vcf_df.columns.difference(_VCF_HEADER)] \
+        )[genotype_columns] \
         .astype(str).drop(
             columns = [
                 "Reference", 
