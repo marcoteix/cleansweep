@@ -94,11 +94,11 @@ class TestCoreSnps:
         _, mask = col.core_snps(geno)
         assert mask.iloc[0]
 
-    def test_single_passing_sample_is_core(self, col):
-        """Only 1 sample has data (n_pass == 1) → core."""
+    def test_single_passing_sample_is_not_core(self, col):
+        """Only 1 sample has data (n_pass == 1) → not core."""
         geno = pd.DataFrame({"sA": ["1"], "sB": ["."], "sC": ["."]})
         _, mask = col.core_snps(geno)
-        assert mask.iloc[0]
+        assert not mask.iloc[0]
 
     def test_snp_in_two_of_five_is_core(self, col):
         """2/5 samples have alt → 1 < n_samples < n_pass-1 → core."""

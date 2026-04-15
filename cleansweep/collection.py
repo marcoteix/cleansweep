@@ -220,7 +220,18 @@ class Collection:
                 "pos"
             ]
         )[vcf_df.columns.difference(_VCF_HEADER)] \
-        .astype(str)
+        .astype(str).drop(
+            columns = [
+                "Reference", 
+                "alt_bc", 
+                "base_counts", 
+                "depth", 
+                "mapq", 
+                "p_alt", 
+                "ref_bc"
+            ],
+            errors = "ignore"
+        )
 
         # Compute pairwise SNP matrix and convert to ANI
         full_snp_matrix = self.snp_matrix(genotype)
@@ -258,7 +269,12 @@ class Collection:
         )
 
         # Get core SNPs once — reused for every sample that triggers filtering
-        _, is_core = self.core_snps(genotype)
+        consensus, is_core = self.core_snps(genotype)
+
+        print(
+            f"Found {is_core.sum()} core SNPs out of {len(is_core)} total SNPs "
+            f"({is_core.mean()*100:.2f}%)."
+        )
 
         for sample_name in ani_matrix.index:
 
@@ -281,23 +297,21 @@ class Collection:
                     **{
                         sample_name: genotype[sample_name] \
                             .where(
-                                is_core,
-                                genotype \
-                                    .astype(str) \
-                                    .replace(".", pd.NA) \
-                                    .mode(
-                                        axis = 1,
-                                        dropna = True
-                                    )[0] \
-                                    .astype(str) \
-                                    .fillna(".")
+                                (
+                                    is_core |
+                                    genotype[sample_name].eq(consensus) |
+                                    genotype[sample_name].eq(".") |
+                                    genotype[sample_name].isna()
+                                ),
+                                consensus
                             )
                     }
                 )
 
         vcf_df = genotype.join(
             vcf_df[
-                vcf_df.columns.intersection(_VCF_HEADER)
+                vcf_df.columns \
+                    .intersection(_VCF_HEADER + ["Reference"])
             ].set_index(
                 ["chrom", "pos"]
             )
@@ -368,6 +382,17 @@ class Collection:
         self,
         genotype: pd.DataFrame
     ) -> Tuple[pd.DataFrame, pd.Series]:
+        
+        # First, get the most common genotype at each site (the per-site consensus)
+        consensus = genotype \
+            .astype(str) \
+            .replace(".", pd.NA) \
+            .mode(
+                axis = 1,
+                dropna = True
+            )[0] \
+            .astype(str) \
+            .fillna(".")
 
         # Number of occurrences across all samples
         n_samples = genotype.eq("1").sum(
@@ -387,8 +412,14 @@ class Collection:
                 n_samples.lt(n_pass-1)
             )
         )
+
+        core = ~(
+            n_pass.lt(2) | \
+            n_samples.eq(1) | \
+            n_samples.eq(n_pass-1)
+        )
         
-        return genotype[core], core
+        return consensus, core
 
     def __raise_run_error(
         self,
