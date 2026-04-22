@@ -47,6 +47,7 @@ class NucmerSNPFilter:
 @dataclass
 class VCFFilter:
 
+    method: Literal["fast", "mixture"] = "mixture"
     random_state: int = 23
 
     def fit(
@@ -70,7 +71,6 @@ class VCFFilter:
         threads: int = 5,
         engine: str = "pymc",
         overdispersion_bias: int = 1,
-        method: Literal["fast", "mixture"] = "mixture"
     ) -> pd.Series:   
     
         # Step 1: estimate the coverage of the background strain
@@ -88,7 +88,7 @@ class VCFFilter:
                 gaps = gaps,
                 n_lines = n_coverage_sites,
                 min_depth = min_depth,
-                use_mle = (method == "fast")
+                use_mle = (self.method == "fast")
             )
         
         # Step 2: include sites with a non-reference base count > alpha regardless
@@ -176,9 +176,11 @@ reference sequences."
         ]
 
         p_alt = self.basecount_filter.fit(
-            vcf = mcmc_vcf, 
+            vcf = mcmc_vcf,
             downsampling = downsampling,
             query_coverage_estimate = self.query_coverage,
+            method = self.method,
+            distribution = self.coverage_estimator.distribution_,
         )
 
         # Join the probabilities with the full VCF DataFrame

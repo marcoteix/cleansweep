@@ -147,7 +147,7 @@ class CoverageEstimator:
         # Remove low coverage sites
         depths = depths[depths >= min_depth]
 
-        query_coverage, _ = self.estimate(
+        query_coverage, self.distribution_ = self.estimate(
             depths,
             **kwargs
         )

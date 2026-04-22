@@ -134,7 +134,11 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
 
         logging.info(f"Filtering {str(input)}, contigs {', '.join(prepare_dict['chrom'])}...")
 
-        vcf_filter = VCFFilter(random_state = seed)
+        vcf_filter = VCFFilter(
+            random_state = seed,
+            method = method
+        )
+        
         vcf_out = vcf_filter.fit(
             vcf = input, 
             gaps = prepare_dict["gaps"],
@@ -153,7 +157,6 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
             threads = threads,
             engine = engine,
             overdispersion_bias = overdispersion_bias,
-            method = method
         )
 
         # Write the output VCF
