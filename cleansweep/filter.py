@@ -210,9 +210,6 @@ reference sequences."
                 path,
                 compress=5
             )
-        
-        else:
-            raise RuntimeError("VCFFilter has no MCMC sampling results.")
 
     def save(self, path: FilePath) -> None:
 
