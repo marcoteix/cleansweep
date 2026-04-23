@@ -95,6 +95,7 @@ class VCFFilter:
         # of if these were called as variants according to Pilon
 
         augment = AugmentVariantCalls()
+        # TODO: Ignore estimated min alt bc pending testing
         augment_min_alt_bc = augment.estimate_min_alt_bc(
             self.query_coverage,
             alpha = 0.01,
@@ -114,7 +115,7 @@ class VCFFilter:
         vcf = augment.augment(
             vcf = vcf,
             query = query,
-            min_alt_bc = augment_min_alt_bc,
+            min_alt_bc = min_alt_bc,
             output = augmented_vcf
         )
 
@@ -198,7 +199,7 @@ reference sequences."
 
     def save_samples(self, path: FilePath) -> None:
         
-        if hasattr(self, "basecount_filter"):
+        if hasattr(self, "basecount_filter") and (self.method == "mixture"):
             
             logging.debug(
                 f"Saving MCMC sampling results to {str(path)}..."
