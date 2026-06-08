@@ -1,6 +1,6 @@
 #%%
 from dataclasses import dataclass
-from typing import Union
+from typing import Literal, Union
 import numpy as np
 from cleansweep.coverage import CoverageEstimator
 from cleansweep.io import FilePath
@@ -47,6 +47,7 @@ class NucmerSNPFilter:
 @dataclass
 class VCFFilter:
 
+    method: Literal["fast", "mixture"] = "mixture"
     random_state: int = 23
 
     def fit(
@@ -69,7 +70,7 @@ class VCFFilter:
         power: float = 0.975,
         threads: int = 5,
         engine: str = "pymc",
-        overdispersion_bias: int = 1
+        overdispersion_bias: int = 1,
     ) -> pd.Series:   
     
         # Step 1: estimate the coverage of the background strain
@@ -87,13 +88,14 @@ class VCFFilter:
                 gaps = gaps,
                 n_lines = n_coverage_sites,
                 min_depth = min_depth,
-                use_mle = (method == "fast")
+                use_mle = (self.method == "fast")
             )
         
         # Step 2: include sites with a non-reference base count > alpha regardless
         # of if these were called as variants according to Pilon
 
         augment = AugmentVariantCalls()
+        # TODO: Ignore estimated min alt bc pending testing
         augment_min_alt_bc = augment.estimate_min_alt_bc(
             self.query_coverage,
             alpha = 0.01,
@@ -113,7 +115,7 @@ class VCFFilter:
         vcf = augment.augment(
             vcf = vcf,
             query = query,
-            min_alt_bc = augment_min_alt_bc,
+            min_alt_bc = min_alt_bc,
             output = augmented_vcf
         )
 
@@ -175,9 +177,11 @@ reference sequences."
         ]
 
         p_alt = self.basecount_filter.fit(
-            vcf = mcmc_vcf, 
+            vcf = mcmc_vcf,
             downsampling = downsampling,
             query_coverage_estimate = self.query_coverage,
+            method = self.method,
+            distribution = self.coverage_estimator.distribution_,
         )
 
         # Join the probabilities with the full VCF DataFrame
@@ -195,7 +199,7 @@ reference sequences."
 
     def save_samples(self, path: FilePath) -> None:
         
-        if hasattr(self, "basecount_filter"):
+        if hasattr(self, "basecount_filter") and (self.method == "mixture"):
             
             logging.debug(
                 f"Saving MCMC sampling results to {str(path)}..."
@@ -206,9 +210,6 @@ reference sequences."
                 path,
                 compress=5
             )
-        
-        else:
-            raise RuntimeError("VCFFilter has no MCMC sampling results.")
 
     def save(self, path: FilePath) -> None:
 

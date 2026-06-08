@@ -1,0 +1,35 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run test suite
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: cleansweep-ci
+          environment-file: environment-ci.yml
+          use-mamba: true
+          cache-environment: true
+
+      - name: Install CleanSweep
+        run: pip install -e .
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --timeout=120 -x

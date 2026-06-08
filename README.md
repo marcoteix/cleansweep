@@ -2,6 +2,10 @@
 
 Finds strain-specific single nucleotide variants from plate swipe data.
 
+CleanSweep leverages allele coverage depths to call strain-specific single-nucleotide variants from short-read plate swipe data. It calls variants along the entire genome of target strains. Thus, CleanSweep allows genetic distances to be estimated using a common reference across samples.
+
+CleanSweep uses the idea that alleles in a target strain should have similar depths of coverage. Firstly, it constructs a reference sequence representing target and background genomes. Secondly, plate sweep reads are aligned to this reference and variants are called. Lastly, CleanSweep filters the resulting single nucleotide variants, keeping those occurring in the target strain.
+
 ## Usage
 
 ### Input data
@@ -96,3 +100,28 @@ This command will create four files in ``./cleansweep``:
 - **cleansweep.filter.log** is a log file.
 
 SNVs trully present in the target strain will have a value of ``PASS`` in the ``FILTER`` field in ``cleansweep.variants.vcf``.
+
+
+### Further filtering for a collection of samples 
+
+If you have run `cleansweep filter` on multiple plate swipes targeting the same strain, you can merge the resulting VCFs into a single multi-sample VCF with `cleansweep collection`. This step also removes sample-private variants from samples that are outliers in terms of ANI — i.e., samples that are unexpectedly dissimilar from all others, which may indicate insufficient filtering with `cleansweep filter`.
+
+```
+cleansweep collection \
+    sample1/cleansweep.variants.vcf.gz \
+    sample2/cleansweep.variants.vcf.gz \
+    sample3/cleansweep.variants.vcf.gz \
+    --output merged.vcf \
+    --tmp-dir tmp/ \
+    --alpha 10 \
+    --min-coverage 10
+```
+
+**How the outlier filter works:**
+
+1. For each sample in the merged VCF, CleanSweep computes the maximum ANI to other samples in the dataset. This results in a distribution of ANIs to the most similar sample in the dataset.
+2. The median and interquartile range (IQR) of these ANIs are computed.
+3. For each sample, the highest ANI it shares with any other sample is checked.
+4. If that maximum ANI falls below `median - alpha × IQR`, the sample is flagged as a divergent outlier and its sample-private variants (i.e., variants that only occur in that sample and not in any other sample in the dataset) are replaced with the per-site consensus of the remaining samples.
+
+`--alpha` controls how aggressively outliers are detected. Larger values (default: 10) are more permissive and only flag extreme outliers; smaller values trigger further filtering for more samples.
