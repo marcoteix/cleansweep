@@ -91,10 +91,7 @@ class Collection:
         for vcf in vcfs:
 
             # Extract filename
-            filename = Path(vcf).name \
-                .removesuffix(".gz") \
-                .removesuffix(".vcf") \
-                .removesuffix(".bcf")
+            filename = Path(vcf).stem
 
             gzvcf = output_directory.joinpath(
                 filename + ".vcf.gz"
