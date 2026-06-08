@@ -101,6 +101,17 @@ This command will create four files in ``./cleansweep``:
 
 SNVs trully present in the target strain will have a value of ``PASS`` in the ``FILTER`` field in ``cleansweep.variants.vcf``.
 
+#### Multiallelic sites (microdiversity)
+
+CleanSweep accounts for **multiallelic** sites, where several alleles co-exist in the target population (microdiversity). For each site it considers the read counts of all four alleles (A, C, G, T) and tests every combination of the observed alleles. A combination is only considered if every allele in it makes up at least a fraction ``--min-af`` (default 0.1) of the combination's combined read count, so alleles that contribute too small a share are treated as sequencing error within that combination. Because the target strain's total depth of coverage is modelled as a Negative Binomial, each combination is scored by the Negative Binomial likelihood of the *summed* read count of its alleles: the best combination is the set of alleles whose combined depth best matches the strain coverage.
+
+Multiallelic sites are written as several lines in ``cleansweep.variants.vcf``, one alternate allele per line, each carrying the ``MULTI`` flag. The ``INFO`` field of each line includes:
+- ``AD`` / ``RD``: the alternate and reference allele base counts.
+- ``AF``: the estimated fraction of this alternate allele in the target population.
+- ``LL``: the log-likelihood of the most likely combination of alleles.
+- ``LLR``: the log-likelihood ratio between the most likely and the second most likely combination.
+- ``PMULTI``: the probability that the site is multiallelic.
+
 
 ### Further filtering for a collection of samples 
 

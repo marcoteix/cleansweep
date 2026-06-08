@@ -142,3 +142,61 @@ class TestFilterCLIFast:
         subprocess.run(cmd, capture_output=True, check=True)
         assert (outdir / "cleansweep.variants.vcf").exists()
         assert (outdir / "cleansweep.filter.swp").exists()
+
+    def test_output_has_multiallelic_info_header(self, synthetic_vcf, synthetic_swp, tmp_path):
+        outdir = tmp_path / "out3"
+        cmd = [
+            "cleansweep", "filter",
+            str(synthetic_vcf), str(synthetic_swp), str(outdir),
+        ] + self._base_opts
+        subprocess.run(cmd, capture_output=True, check=True)
+        text = (outdir / "cleansweep.variants.vcf").read_text()
+        for tag in ("ID=AF,", "ID=LLR,", "ID=PMULTI,", "ID=MULTI,"):
+            assert tag in text
+
+
+class TestFilterMultiallelic:
+    """End-to-end multiallelic detection on the microdiversity fixture."""
+
+    _opts = [
+        "--method", "fast", "--variants",
+        "-dp", "5", "-a", "10", "-r", "10",
+        "-Nc", "2000", "-s", "42", "-V", "0",
+    ]
+
+    def _run(self, vcf, swp, outdir):
+        cmd = ["cleansweep", "filter", str(vcf), str(swp), str(outdir)] + self._opts
+        rc = subprocess.run(cmd, capture_output=True)
+        assert rc.returncode == 0, rc.stderr.decode()
+        return outdir / "cleansweep.variants.vcf"
+
+    def test_detects_multiallelic_sites(self, synthetic_multiallelic_vcf, synthetic_swp, tmp_path):
+        out = self._run(synthetic_multiallelic_vcf, synthetic_swp, tmp_path / "ma")
+        multi_lines = [
+            ln for ln in out.read_text().splitlines()
+            if not ln.startswith("#") and ln.split("\t")[7].endswith("MULTI")
+        ]
+        # At least a few of the 10 embedded microdiversity sites are recovered
+        assert len(multi_lines) >= 3
+
+    def test_inspect_reports_pi_and_multiallelic_count(
+        self, synthetic_multiallelic_vcf, synthetic_swp, tmp_path
+    ):
+        import json
+        outdir = tmp_path / "ma2"
+        out_vcf = self._run(synthetic_multiallelic_vcf, synthetic_swp, outdir)
+
+        insp = tmp_path / "insp"
+        rc = subprocess.run(
+            [
+                "cleansweep", "inspect", str(out_vcf), str(insp),
+                "-c", str(outdir / "cleansweep.filter.swp"), "--how", "stats",
+            ],
+            capture_output=True,
+        )
+        assert rc.returncode == 0, rc.stderr.decode()
+
+        report = json.loads((insp / "cleansweep.info.json").read_text())
+        stats = report["VCF statistics"]
+        assert stats["Number of multiallelic sites"] >= 3
+        assert stats["Nucleotide diversity (pi)"] > 0.0

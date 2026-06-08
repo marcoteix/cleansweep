@@ -50,6 +50,10 @@ coverage for the query strain.")
 allele base count for a variant to pass the CleanSweep filters. The default is 10.")
         params_grp.add_argument("--min-ref-bc", "-r", type=int, default=10, help="Variants with fewer than \
 this number of reference allele base counts pass the CleanSweep filters automatically.")
+        params_grp.add_argument("--min-af", "-af", type=float, default=0.1, help="Minimum allele fraction \
+for an allele to be kept in a combination when detecting multiallelic sites. The allele fraction is the \
+allele base count divided by the combined base count of the alleles in the combination. Combinations \
+containing an allele below this fraction are not considered. Defaults to %(default)s.")
         params_grp.add_argument("--downsample", "-d", type=float, default=500, help="Number of lines in the \
 Pilon output VCF file used to fit the CleanSweep filters. If a float, uses that proportion of lines. Defaults \
 to 500.") 
@@ -90,6 +94,7 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
         min_depth: int,
         min_alt_bc: int,
         min_ref_bc: int,
+        min_af: float,
         max_overdispersion: float,
         downsample: Union[int, float],
         seed: int,
@@ -149,6 +154,7 @@ help="pyMC backend used for NUTS sampling. Default is \"pymc\".")
             min_depth = min_depth,
             min_alt_bc = min_alt_bc,
             min_ref_bc = min_ref_bc,
+            min_af = min_af,
             max_overdispersion = max_overdispersion,
             downsampling = downsample,
             chains = n_chains,

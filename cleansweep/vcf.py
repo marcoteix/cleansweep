@@ -9,11 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 from io import StringIO
-from warnings import warn
+from warnings import warn, catch_warnings, simplefilter
 from cleansweep.typing import File
 from cleansweep.__version__ import __version__
 
 _VCF_HEADER = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "info", "format", "sample"]
+
+# Order of the bases in the Pilon BC (base counts) INFO tag
+_BASES = ["A", "C", "G", "T"]
+_BASE_INDEX = {b: i for i, b in enumerate(_BASES)}
+_BC_COLS = ["bc_A", "bc_C", "bc_G", "bc_T"]
 
 
 @dataclass
@@ -26,12 +31,13 @@ class VCF:
         if isinstance(self.file, Path): self.file = str(self.file) 
 
     def read(
-        self, 
-        chrom: Union[str, None, List], 
-        filters: Union[Collection[str], None] = None, 
+        self,
+        chrom: Union[str, None, List],
+        filters: Union[Collection[str], None] = None,
         include: Union[str, None]=None,
         exclude: Union[str, None]=None,
-        add_base_counts: bool = True
+        add_base_counts: bool = True,
+        collapse: bool = True
     ) -> pd.DataFrame:
         """Filters a VCF file (compressed or uncompressed) with bcftools. Requires bcftools.
 
@@ -93,6 +99,12 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         self.vcf = self.exclude_indels(self.vcf)
         if add_base_counts:
             self.vcf = self.add_info_columns(self.vcf)
+            # Collapse multiallelic sites split across several caller lines into one
+            # row per site (keeps the per-allele base counts on a single record).
+            # CleanSweep output VCFs intentionally split multiallelic sites across
+            # lines, so reading those back should pass collapse=False.
+            if collapse:
+                self.vcf = self.collapse_multiallelic_lines(self.vcf)
 
         return self.vcf
     
@@ -159,7 +171,11 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         if not hasattr(vcf, "base_counts"):
             vcf = vcf.assign(base_counts = vcf["info"] \
                 .apply(partial(get_info_value, tag="BC", dtype=str)))
-            
+
+        # Parse the per-allele base counts (bc_A, bc_C, bc_G, bc_T) for
+        # multiallelic site detection
+        vcf = self.parse_base_counts(vcf)
+
         if not hasattr(vcf, "mapq"):
             vcf = vcf.assign(mapq = vcf["info"] \
                 .apply(partial(get_info_value, tag="MQ", dtype=int)))
@@ -178,7 +194,31 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
                     )
                 )
             )
-                        
+
+        # Parse the multiallelic INFO fields written by the CleanSweep filter so that
+        # downstream tools (e.g. inspect) can read them back from the output VCF
+        for tag, column in [
+            ("AF", "allele_fraction"),
+            ("PMULTI", "p_multi"),
+            ("LLR", "llr"),
+            ("LL", "best_logL"),
+        ]:
+            if column not in vcf.columns:
+                vcf = vcf.assign(
+                    **{
+                        column: vcf["info"].apply(
+                            partial(get_info_value, tag=tag, dtype=float)
+                        )
+                    }
+                )
+
+        if "is_multiallelic" not in vcf.columns:
+            vcf = vcf.assign(
+                is_multiallelic = vcf["info"].apply(
+                    lambda x: bool(_has_info_flag(x, "MULTI"))
+                )
+            )
+
         # If a variant is missing alternate allele information, extract is from the base counts
         vcf.loc[
             vcf.alt.eq("."),
@@ -209,18 +249,110 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
                 axis = 1
             )
         )
-    
+
+    def collapse_multiallelic_lines(self, vcf: pd.DataFrame) -> pd.DataFrame:
+        """Collapses multiallelic sites split across several lines into a single row.
+
+        Some variant callers emit one line per alternate allele, so a multiallelic site
+        can appear as multiple records sharing the same CHROM and POS. CleanSweep needs
+        one row per site holding the per-allele base counts. Pilon already reports a
+        site-level BC tag, so the base counts are identical across split lines; taking
+        the maximum across lines is robust both to that case and to callers that report
+        per-line counts.
+
+        Args:
+            vcf (pd.DataFrame): VCF DataFrame with the per-allele ``bc_*`` columns.
+
+        Returns:
+            pd.DataFrame: One row per (chrom, pos), with an ``alt_set`` column listing the
+                distinct alternate alleles seen across the collapsed lines.
+        """
+
+        # Record the distinct alternate alleles seen at each site
+        vcf = vcf.assign(
+            alt_set = vcf["alt"].apply(
+                lambda a: frozenset([a]) 
+                if isinstance(a, str) and a != "." 
+                else frozenset()
+            )
+        )
+
+        # Nothing to collapse if there is at most one line per site
+        site_id = vcf["chrom"].astype(str) + "_" + vcf["pos"].astype(str)
+        if not site_id.duplicated().any():
+            return vcf
+
+        logging.debug(
+            f"Collapsing {int(site_id.duplicated().sum())} multiallelic lines split "
+            "across records."
+        )
+
+        aggregations = {
+            col: ("max" if col in _BC_COLS else "first")
+            for col in vcf.columns
+            if col not in ["chrom", "pos", "alt_set"]
+        }
+        aggregations["alt_set"] = lambda s: frozenset().union(*s)
+
+        collapsed = vcf \
+            .groupby(["chrom", "pos"], sort=False, as_index=False) \
+            .agg(aggregations)
+
+        # Recompute the per-allele base counts (alt/ref) after collapsing, using the
+        # representative alt allele kept from the first line
+        return collapsed.assign(
+            alt_bc = collapsed.apply(
+                lambda x: self.extract_base_counts(x.base_counts, x.alt),
+                axis = 1
+            ),
+            ref_bc = collapsed.apply(
+                lambda x: self.extract_base_counts(x.base_counts, x.ref),
+                axis = 1
+            )
+        )
+
+    def parse_base_counts(self, vcf: pd.DataFrame) -> pd.DataFrame:
+        """Splits the BC base counts string (\"A,C,G,T\") into four integer columns.
+
+        Adds nullable integer columns ``bc_A``, ``bc_C``, ``bc_G`` and ``bc_T`` so the
+        per-allele read counts are available for multiallelic site detection. Sites with
+        a missing or malformed BC tag get ``<NA>`` for every base count.
+
+        Args:
+            vcf (pd.DataFrame): VCF DataFrame with a ``base_counts`` column.
+
+        Returns:
+            pd.DataFrame: The same DataFrame with the four ``bc_*`` columns added.
+        """
+
+        if all(c in vcf.columns for c in _BC_COLS):
+            return vcf
+
+        bc = vcf["base_counts"] \
+            .str.split(",", expand=True)
+
+        # Guard against malformed BC tags that do not have all four bases
+        for i, col in enumerate(_BC_COLS):
+            vcf = vcf.assign(
+                **{
+                    col: (
+                        pd.to_numeric(bc[i], errors="coerce").astype("Int64")
+                        if i in bc.columns
+                        else pd.array([pd.NA] * len(vcf), dtype="Int64")
+                    )
+                }
+            )
+
+        return vcf
+
     def extract_base_counts(
         self,
         base_counts: str,
         nucleotide: str,
     ) -> int:
-        
-        # Order of bases in the VCF BC tag
-        bases = {"A": 0, "C": 1, "G": 2, "T": 3}
 
-        if isinstance(nucleotide, str) and nucleotide in bases:
-            return int(base_counts.split(",")[bases[nucleotide]])
+        if isinstance(nucleotide, str) and nucleotide in _BASE_INDEX:
+            return int(base_counts.split(",")[_BASE_INDEX[nucleotide]])
         else:
             warn(f"Got unknown base {nucleotide}. Setting base count to 0.")
             return 0
@@ -234,22 +366,19 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         base_counts: str,
         ref: str
     ) -> str:
-        
-        # Order of bases in the VCF BC tag
-        bases = ["A", "C", "G", "T"]
-        
-        # Convert base counts to int, setting the base count for the ref allele 
+
+        # Convert base counts to int, setting the base count for the ref allele
         # to the lowest count
         bc = [
             int(x) if b != ref else -1
             for x, b in zip(
-                base_counts.split(","), 
-                bases
-            ) 
+                base_counts.split(","),
+                _BASES
+            )
         ]
 
         # Find the maximum base count (alt allele)
-        return bases[np.argmax(bc)]
+        return _BASES[np.argmax(bc)]
         
 def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     
@@ -259,8 +388,16 @@ def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
 
     try:
         return dtype(str_value)
-    except: 
+    except:
         return None
+
+def _has_info_flag(s: str, flag: str, delim: str = ";") -> bool:
+    """Returns True if a valueless INFO flag (e.g. \"MULTI\") is present in an INFO string."""
+
+    if not isinstance(s, str):
+        return False
+
+    return flag in [field.split("=")[0] for field in s.split(delim)]
 
 def format_vcf_header(
     header: str,
@@ -300,7 +437,12 @@ def format_vcf_header(
             "##INFO=<ID=ORGFILT,Number=1,Type=String,Description=\"Original FILTER flag in the input VCF\">",
             "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
             "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
-            "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">",
+            "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Alternate allele base count for this ALT allele\">",
+            "##INFO=<ID=AF,Number=1,Type=Float,Description=\"CleanSweep estimated allele fraction of this ALT allele in the query population\">",
+            "##INFO=<ID=LL,Number=1,Type=Float,Description=\"Log-likelihood of the most likely combination of alleles\">",
+            "##INFO=<ID=LLR,Number=1,Type=Float,Description=\"Log-likelihood ratio between the most likely and second most likely combination of alleles\">",
+            "##INFO=<ID=PMULTI,Number=1,Type=Float,Description=\"Probability that the site is multiallelic (microdiversity)\">",
+            "##INFO=<ID=MULTI,Number=0,Type=Flag,Description=\"Site called multiallelic by CleanSweep\">",
         ]
         if add_filters
         else []
@@ -320,13 +462,107 @@ def format_vcf_header(
 
     return "\n".join(lines)
 
+def expand_multiallelic(vcf: pd.DataFrame) -> pd.DataFrame:
+    """Expands passing sites into one row per called (non-reference) allele.
+
+    For each passing site whose most likely combination of alleles contains one or more
+    non-reference alleles, a row is emitted per non-reference allele, with that row's
+    ``alt``, ``alt_bc`` and ``allele_fraction`` set to the values of the called allele.
+    Multiallelic sites therefore appear as several lines, one alternate allele per line.
+    Sites that were not evaluated by the multiallelic model (missing ``best_combination``,
+    e.g. rows coming from the un-evaluated full VCF) pass through unchanged.
+
+    Args:
+        vcf (pd.DataFrame): VCF DataFrame, optionally carrying the multiallelic model
+            columns (``best_combination``, ``allele_fractions``, ``cleansweep_filter``).
+
+    Returns:
+        pd.DataFrame: VCF DataFrame with multiallelic sites expanded to one row per ALT.
+    """
+
+    if "best_combination" not in vcf.columns:
+        return vcf
+
+    def _is_expandable(row: pd.Series) -> bool:
+        combination = row.get("best_combination")
+        return (
+            isinstance(combination, frozenset)
+            and row.get("cleansweep_filter") == "PASS"
+            and len(combination - {row["ref"]}) >= 1
+        )
+
+    expandable = vcf.apply(_is_expandable, axis=1)
+    if not expandable.any():
+        return vcf
+
+    # Ensure the per-allele fraction column exists on every row so concatenating the
+    # expanded rows back does not change column dtypes
+    if "allele_fraction" not in vcf.columns:
+        vcf = vcf.assign(allele_fraction = np.nan)
+
+    kept = vcf[~expandable]
+    rows = []
+    for _, row in vcf[expandable].iterrows():
+        fractions = row.get("allele_fractions") or {}
+        base_counts = row.get("base_counts")
+        for allele in sorted(row["best_combination"] - {row["ref"]}):
+            new_row = row.copy()
+            new_row["alt"] = allele
+            if isinstance(base_counts, str):
+                new_row["alt_bc"] = int(base_counts.split(",")[_BASE_INDEX[allele]])
+            new_row["allele_fraction"] = (
+                float(fractions[allele]) if allele in fractions else None
+            )
+            rows.append(new_row)
+
+    expanded = pd.DataFrame(rows).reindex(columns=vcf.columns)
+
+    # Some model columns are all-NA in the non-expanded rows; the resulting concat is
+    # correct but pandas emits a dtype deprecation warning we can safely silence
+    with catch_warnings():
+        simplefilter("ignore", FutureWarning)
+        return pd.concat([kept, expanded]).sort_values(["chrom", "pos"])
+
+def _info_value(row: pd.Series, column: str, fmt) -> str:
+    """Formats a per-site value for the INFO field, or \".\" when it is missing."""
+
+    if column not in row:
+        return "."
+
+    value = row[column]
+    if value is None or pd.isna(value):
+        return "."
+
+    return fmt(value)
+
+def _build_info_field(row: pd.Series) -> str:
+    """Builds the INFO column for an output VCF line, including multiallelic fields."""
+
+    fields = [
+        row["info"],
+        "PILON=" + row["filter"],
+        "CSP=" + _info_value(row, "p_alt", lambda v: str(int(v))),
+        "RD=" + _info_value(row, "ref_bc", lambda v: str(int(v))),
+        "AD=" + _info_value(row, "alt_bc", lambda v: str(int(v))),
+        "AF=" + _info_value(row, "allele_fraction", lambda v: f"{v:.4f}"),
+        "LL=" + _info_value(row, "best_logL", lambda v: f"{v:.4f}"),
+        "LLR=" + _info_value(row, "llr", lambda v: f"{v:.4f}"),
+        "PMULTI=" + _info_value(row, "p_multi", lambda v: f"{v:.4f}"),
+    ]
+
+    # MULTI is a valueless flag, only added to passing multiallelic sites
+    if row.get("is_multiallelic") == True and row.get("cleansweep_filter") == "PASS":
+        fields.append("MULTI")
+
+    return ";".join(fields)
+
 def write_vcf(
     vcf: pd.DataFrame,
     file: File,
     header: str,
     chrom: Union[None, str, List] = None,
 ):
-    
+
     header = format_vcf_header(
         header,
         chrom = chrom
@@ -336,8 +572,11 @@ def write_vcf(
         vcf = vcf.assign(
             cleansweep_filter = pd.NA
         )
-        
-    # Subset the columns in the VCF spec and add fields to INFO 
+
+    # Expand multiallelic sites into one row per called alternate allele
+    vcf = expand_multiallelic(vcf)
+
+    # Subset the columns in the VCF spec and add fields to INFO
     fmt_vcf = vcf[
         _VCF_HEADER
     ].rename(
@@ -359,40 +598,8 @@ def write_vcf(
             if "cleansweep_filter" in vcf
             else vcf["sample"]
         ),
-        INFO = vcf.apply(
-            lambda x: ";".join(
-                [
-                    x["info"],
-                    "PILON=" + x["filter"],
-                    "CSP=" + str(
-                        int(x.p_alt)
-                        if (
-                            "p_alt" in x and \
-                            not pd.isna(x["p_alt"]) and \
-                            not x["p_alt"] is None
-                        ) else "."
-                    ),
-                    "RD=" + (
-                        str(int(x.ref_bc))
-                        if (
-                            "ref_bc" in x and \
-                            not pd.isna(x["ref_bc"]) and \
-                            not x["ref_bc"] is None
-                        ) else "."
-                    ),
-                    "AD=" + (
-                        str(int(x.alt_bc))
-                        if (
-                            "alt_bc" in x and \
-                            not pd.isna(x["alt_bc"]) and \
-                            not x["alt_bc"] is None
-                        ) else "."
-                    ),
-                ]
-            ),
-            axis = 1
-        )
-    )[ 
+        INFO = vcf.apply(_build_info_field, axis = 1)
+    )[
         [
             x.upper()
             for x in _VCF_HEADER

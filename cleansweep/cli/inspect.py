@@ -166,9 +166,12 @@ Defaults to %(default)s."
             exist_ok = True
         )
         
-        # Read VCF
-        vcf = VCF(input).read(
-            chrom = None
+        # Read VCF. Do not collapse multiallelic sites: CleanSweep output VCFs split
+        # them across lines on purpose and inspect needs the per-allele records.
+        vcf_reader = VCF(input)
+        vcf = vcf_reader.read(
+            chrom = None,
+            collapse = False
         )
 
         if (
@@ -206,7 +209,8 @@ Defaults to %(default)s."
             inspector = Inspector()
             report = inspector.report(
                 vcf = vcf,
-                cleansweep = cleansweep
+                cleansweep = cleansweep,
+                header = vcf_reader.get_header()
             )
 
             # Save as a JSON file

@@ -62,6 +62,7 @@ class VCFFilter:
         min_depth: int = 0,
         min_alt_bc: int = 0,
         min_ref_bc: int = 0,
+        min_af: float = 0.1,
         max_overdispersion: float = 0.7,
         downsampling: Union[int, float] = 1.0,
         chains: int = 5,
@@ -71,7 +72,7 @@ class VCFFilter:
         threads: int = 5,
         engine: str = "pymc",
         overdispersion_bias: int = 1,
-    ) -> pd.Series:   
+    ) -> pd.DataFrame:
     
         # Step 1: estimate the coverage of the background strain
 
@@ -95,12 +96,6 @@ class VCFFilter:
         # of if these were called as variants according to Pilon
 
         augment = AugmentVariantCalls()
-        # TODO: Ignore estimated min alt bc pending testing
-        augment_min_alt_bc = augment.estimate_min_alt_bc(
-            self.query_coverage,
-            alpha = 0.01,
-            overdispersion = max_overdispersion
-        )
 
         # Path to the augmented VCF
         Path(tmp_dir).mkdir(
@@ -169,33 +164,52 @@ reference sequences."
             max_overdispersion = max_overdispersion
         )
         
-        # Fit and get the probabilities of the query having the alternate allele
-        mcmc_vcf = vcf[
+        # Sites used to fit the Negative Binomial dispersion of the query depth of
+        # coverage. Sites with a low reference base count are excluded from the fit (they
+        # are clear variants and would bias the dispersion estimate).
+        fit_vcf = vcf[
             ~vcf.low_ref_bc & \
             ~vcf.low_cov & \
-            vcf.snp_filter.eq("PASS") 
+            vcf.snp_filter.eq("PASS")
         ]
 
-        p_alt = self.basecount_filter.fit(
-            vcf = mcmc_vcf,
+        # Sites evaluated by the multiallelic model. Low reference base count sites are
+        # included here so that microdiversity is detected even when the reference allele
+        # is rare (e.g. two co-existing non-reference alleles); they still pass
+        # automatically via the filter tag below.
+        eval_vcf = vcf[
+            ~vcf.low_cov & \
+            vcf.snp_filter.eq("PASS")
+        ]
+
+        site_results = self.basecount_filter.fit(
+            vcf = fit_vcf,
+            eval_vcf = eval_vcf,
             downsampling = downsampling,
             query_coverage_estimate = self.query_coverage,
             method = self.method,
             distribution = self.coverage_estimator.distribution_,
+            min_af = min_af,
         )
 
-        # Join the probabilities with the full VCF DataFrame
+        # Join the per-site multiallelic results with the full VCF DataFrame. Sites not
+        # evaluated by the multiallelic model (low coverage or reference variants) get
+        # NaN for these columns.
+        result_columns = [
+            "best_combination", "best_logL", "llr", "p_multi",
+            "allele_fractions", "n_candidates", "is_multiallelic", "evidence_ok",
+        ]
         vcf = vcf.drop(
-                columns = "p_alt",
+                columns = result_columns + ["p_alt"],
                 errors = "ignore"
             ).join(
-                p_alt.rename("p_alt")
+                site_results[result_columns]
             )
-                
-        return self.__add_filter_tag(
-            vcf = vcf,
-            bias = 0
-        )
+
+        # Keep the best-vs-second-best log-likelihood ratio as the legacy per-site score
+        vcf = vcf.assign(p_alt = vcf["llr"])
+
+        return self.__add_filter_tag(vcf = vcf)
 
     def save_samples(self, path: FilePath) -> None:
         
@@ -223,22 +237,40 @@ reference sequences."
             compress=5
         )
 
+    @staticmethod
+    def __call_site(row: pd.Series) -> str:
+        """Calls a site PASS or FAIL from the most likely combination of alleles.
+
+        A site passes when the selected combination contains at least one non-reference
+        allele and the combined depth of the present alleles is consistent with the query
+        coverage (``evidence_ok``). Sites not evaluated by the multiallelic model
+        (NaN ``best_combination``) fail here and are resolved by the QC overrides.
+        """
+
+        combination = row.get("best_combination", None)
+
+        if not isinstance(combination, frozenset):
+            return "FAIL"
+
+        if not bool(row.get("evidence_ok", False)):
+            return "FAIL"
+
+        # PASS if any allele in the combination differs from the reference
+        return "PASS" if (combination - {row["ref"]}) else "FAIL"
+
     def __add_filter_tag(
-        self, 
-        vcf: pd.DataFrame, 
-        bias: float
+        self,
+        vcf: pd.DataFrame,
     ) -> pd.DataFrame:
 
+        # A site passes if the most likely combination of alleles contains at least one
+        # non-reference allele and its depth is consistent with the query coverage
         vcf = vcf.assign(
-            cleansweep_filter = vcf.p_alt \
-                .ge(bias) \
-                .replace(
-                    {
-                        True: "PASS", 
-                        False: "FAIL"
-                    }
-                )
+            cleansweep_filter = vcf.apply(
+                self.__call_site,
+                axis = 1
             )
+        )
         vcf.loc[
             vcf.low_alt_bc,
             "cleansweep_filter"

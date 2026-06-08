@@ -11,6 +11,7 @@ import pytensor
 import platform
 from warnings import warn
 from scipy.stats import rv_discrete
+from cleansweep.microdiversity import MicrodiversityModel
 
 # Fix compiler stuff for pymc
 if platform.system() == "Darwin":
@@ -217,19 +218,11 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                     self.dist_params["query_overdispersion"] * 3 - 1.5
                 )
             )
-            
-            # Predict for the full data 
-            logging.debug(
-                "Getting the MAP estimator for all data..."
-            )
-            logging.info
-            alt_p = self.get_posterior(
-                vcf, 
-                self.sampling_results, 
-                query_coverage_estimate,
-            )
-            
-        return alt_p 
+
+        # The MCMC only estimates the Negative Binomial dispersion of the query depth
+        # of coverage. The per-site allele calls are made by the multiallelic model in
+        # fit(), which reuses this dispersion.
+        return self.dist_params
 
     def get_ll_ratio(
         self, 
@@ -399,17 +392,72 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
 
         return ll_ratio
     
+    def _build_microdiversity_model(
+        self,
+        query_coverage_estimate: float,
+        distribution: Union[rv_discrete, None],
+        method: Literal["mixture", "fast"],
+        min_af: float,
+    ) -> MicrodiversityModel:
+        """Builds the multiallelic model from the fitted NB dispersion of either method."""
+
+        if method == "mixture":
+            # pyMC parametrises the NB as (mu, alpha); the dispersion alpha is the scipy
+            # shape parameter n
+            alpha = self.dist_params["query_overdispersion"]
+        else:
+            # Fast mode: the NB was fitted by MLE as scipy nbinom(n=r, p); alpha = r
+            alpha = float(distribution.args[0])
+
+        return MicrodiversityModel(
+            mu = query_coverage_estimate,
+            alpha = alpha,
+            min_af = min_af,
+            power = self.power,
+        )
+
+    def evaluate_sites(
+        self,
+        vcf: pd.DataFrame,
+        query_coverage_estimate: float,
+        distribution: Union[rv_discrete, None],
+        method: Literal["mixture", "fast"],
+        min_af: float,
+    ) -> pd.DataFrame:
+        """Runs the multiallelic combination model on every site in ``vcf``.
+
+        Returns the per-site DataFrame produced by :class:`MicrodiversityModel`
+        (``best_combination``, ``best_logL``, ``llr``, ``p_multi``,
+        ``allele_fractions``, ``n_candidates``, ``is_multiallelic``, ``evidence_ok``).
+        """
+
+        self.microdiversity_model = self._build_microdiversity_model(
+            query_coverage_estimate = query_coverage_estimate,
+            distribution = distribution,
+            method = method,
+            min_af = min_af,
+        )
+
+        return self.microdiversity_model.evaluate(vcf)
+
     def fit(
-        self, 
-        vcf: pd.DataFrame, 
+        self,
+        vcf: pd.DataFrame,
         query_coverage_estimate: float,
         downsampling: Union[int, float] = 1.0,
         method: Literal["mixture", "fast"] = "mixture",
-        distribution: Union[rv_discrete, None] = None        
-    ) -> pd.Series:
-        
+        distribution: Union[rv_discrete, None] = None,
+        min_af: float = 0.1,
+        eval_vcf: Union[pd.DataFrame, None] = None,
+    ) -> pd.DataFrame:
+
         logging.debug(f"Using method \"{method}\" in BaseCountFilter.fit().")
-        
+
+        # The dispersion is fitted on ``vcf``; the per-site calls are made on ``eval_vcf``
+        # (defaults to the fit set when not provided)
+        if eval_vcf is None:
+            eval_vcf = vcf
+
         if method == "fast":
 
             if distribution is None:
@@ -418,13 +466,10 @@ burn-in draws, and {self.threads} threads. Random seed: {self.random_state}. Sam
                 logging.error(msg)
                 raise ValueError(msg)
 
-        # Probability of the query having the alternate allele, given the alternate 
-        # and reference allele base counts
-        if method == "mixture":
-            # Use MCMC sampling to fit a Negative Binomial distribution to
-            # possible variants
-
-            self.prob = self.fit_mcmc(
+        elif method == "mixture":
+            # Use MCMC sampling to estimate the Negative Binomial dispersion of the
+            # query depth of coverage from candidate variants
+            self.fit_mcmc(
                 vcf,
                 query_coverage_estimate = query_coverage_estimate,
                 downsampling = downsampling
@@ -436,34 +481,39 @@ the query strain and alleles in the query strain: \
 {'; '.join([k+': '+str(v) for k,v in self.dist_params.items()])}."
             )
 
-        elif method == "fast":
-            # Compute the likelihood ratio for alternate and reference allele depths,
-            # given a distribution fitted from unaligned regions in the target strain
-
-            self.prob = self.fit_fast(
-                vcf = vcf,
-                distribution = distribution
-            )
-
         else:
 
             msg = f"Got unknown method \"{method}\". Must be one of \"mixture\" or \"fast\"."
             logging.error(msg)
             raise ValueError(msg)
 
+        # Test every combination of alleles per site and select the most likely one,
+        # using the NB dispersion estimated above (the same engine serves both methods)
+        self.prob = self.evaluate_sites(
+            vcf = eval_vcf,
+            query_coverage_estimate = query_coverage_estimate,
+            distribution = distribution,
+            method = method,
+            min_af = min_af,
+        )
+
+        # Keep the best-vs-second-best log-likelihood ratio as the legacy per-site score
+        self.p_alt = self.prob["llr"]
+
         return self.prob
 
     def filter(self, vcf: pd.DataFrame) -> pd.DataFrame:
 
-        return vcf[self.prob.ge(1)]
-    
+        return vcf[self.p_alt.ge(1)]
+
     def fit_filter(
-        self, 
-        vcf: pd.DataFrame, 
-        query_coverage_estimate: float, 
+        self,
+        vcf: pd.DataFrame,
+        query_coverage_estimate: float,
         downsampling: Union[int, float] = 1.0,
         method: Literal["mixture", "fast"] = "mixture",
-        distribution: Union[rv_discrete, None] = None    
+        distribution: Union[rv_discrete, None] = None,
+        min_af: float = 0.1,
     ) -> pd.DataFrame:
 
         self.fit(
@@ -471,7 +521,8 @@ the query strain and alleles in the query strain: \
             query_coverage_estimate = query_coverage_estimate,
             downsampling = downsampling,
             method = method,
-            distribution = distribution
+            distribution = distribution,
+            min_af = min_af,
         )
         return self.filter(vcf)
 

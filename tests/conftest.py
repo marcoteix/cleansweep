@@ -91,6 +91,79 @@ def synthetic_vcf(session_tmpdir) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Synthetic Pilon-format VCF with multiallelic (microdiversity) sites
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="session")
+def synthetic_multiallelic_vcf(session_tmpdir) -> Path:
+    """
+    bgzipped, CSI-indexed Pilon-format VCF with embedded multiallelic sites.
+
+    Most positions are near-reference. A set of biallelic sites carry a strong
+    alternate allele, and a set of multiallelic sites split their coverage roughly
+    evenly between the reference (A) and a second allele (G).
+    """
+    vcf_path = session_tmpdir / "synthetic_multiallelic.vcf.gz"
+    rng = np.random.default_rng(123)
+
+    header = pysam.VariantHeader()
+    header.add_line("##fileformat=VCFv4.2")
+    header.add_line(f"##contig=<ID={CHROM},length={CHROM_LEN}>")
+    header.add_line('##INFO=<ID=DP,Number=1,Type=Integer,Description="Total depth">')
+    header.add_line(
+        '##INFO=<ID=BC,Number=4,Type=Integer,Description="Base counts A,C,G,T">'
+    )
+    header.add_line('##INFO=<ID=MQ,Number=1,Type=Integer,Description="Mean mapping quality">')
+    header.add_line('##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count">')
+    header.add_line('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
+    header.add_sample("SAMPLE")
+
+    depths = rng.negative_binomial(20, 0.25, size=CHROM_LEN).clip(20).astype(int)
+    candidates = list(range(500, CHROM_LEN - 500))
+    biallelic = set(rng.choice(candidates, size=20, replace=False))
+    multiallelic = set(
+        rng.choice(sorted(set(candidates) - biallelic), size=10, replace=False)
+    )
+
+    with pysam.VariantFile(vcf_path, "wz", header=header) as vf:
+        for i in range(CHROM_LEN):
+            dp = int(depths[i])
+            pos = i + 1
+            bc = [dp, 0, 0, 0]   # default near-reference (A)
+            alt, ac = "T", 0
+
+            if pos in multiallelic:
+                g = dp // 2
+                bc = [dp - g, 0, g, 0]   # A/G ~50/50 microdiversity
+                alt, ac = "G", 1
+            elif pos in biallelic:
+                a = int(dp * 0.9)
+                bc = [dp - a, 0, 0, a]    # strong fixed alternate (T)
+                alt, ac = "T", 1
+            else:
+                e = int(rng.integers(0, 4))
+                bc = [dp - e, e, 0, 0]    # tiny error background
+
+            rec = vf.new_record()
+            rec.chrom = CHROM
+            rec.pos = pos
+            rec.ref = "A"
+            rec.alts = (alt,)
+            rec.qual = 60
+            rec.info["DP"] = dp
+            rec.info["BC"] = tuple(bc)
+            rec.info["MQ"] = 60
+            rec.info["AC"] = ac
+            rec.samples["SAMPLE"]["GT"] = (ac,)
+            vf.write(rec)
+
+    rc = subprocess.run(["bcftools", "index", str(vcf_path)], capture_output=True)
+    if rc.returncode != 0:
+        raise RuntimeError(f"bcftools index failed: {rc.stderr.decode()}")
+
+    return vcf_path
+
+
+# ---------------------------------------------------------------------------
 # Synthetic .swp file (cleansweep prepare output)
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
