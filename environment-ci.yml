@@ -12,6 +12,8 @@ dependencies:
   - pandas
   - joblib
   - biopython
+  - pymc
+  - pytensor
   - pytest
   - pytest-timeout
   - scikit-learn
