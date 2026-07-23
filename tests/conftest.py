@@ -182,3 +182,73 @@ def synthetic_collection_vcfs(session_tmpdir):
         vcfs.append(vcf_path)
 
     return tuple(vcfs)
+
+
+# ---------------------------------------------------------------------------
+# Synthetic multi-sample VCFs with one ANI outlier, for --exclude tests
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="session")
+def synthetic_collection_vcfs_with_outlier(session_tmpdir):
+    """
+    Three bgzipped, CSI-indexed single-sample VCFs for `cleansweep collection`.
+
+    sampleA and sampleB share identical genotypes at every site (ANI 1.0 to
+    each other). sampleC has an inverted genotype at most sites, giving it a
+    much lower ANI to both — it should be flagged as an outlier by the
+    ANI-based filter at low --alpha values.
+
+    Returns: tuple[Path, Path, Path] (sampleA, sampleB, sampleC)
+    """
+    rng = np.random.default_rng(11)
+    variant_positions = sorted(
+        rng.choice(range(200, CHROM_LEN - 200), size=20, replace=False)
+    )
+
+    genotypes = {
+        "sampleA": [1] * 20,
+        "sampleB": [1] * 20,
+        "sampleC": [0] * 18 + [1, 1],
+    }
+
+    vcfs = []
+    for sample_name, gts in genotypes.items():
+        vcf_path = session_tmpdir / f"{sample_name}.outlier.vcf.gz"
+
+        header = pysam.VariantHeader()
+        header.add_line("##fileformat=VCFv4.2")
+        header.add_line(f"##contig=<ID={CHROM},length={CHROM_LEN}>")
+        header.add_line('##INFO=<ID=DP,Number=1,Type=Integer,Description="Total depth">')
+        header.add_line(
+            '##INFO=<ID=BC,Number=4,Type=Integer,'
+            'Description="Base counts A,C,G,T">'
+        )
+        header.add_line('##INFO=<ID=MQ,Number=1,Type=Integer,Description="Mean mapping quality">')
+        header.add_line('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
+        header.add_sample(sample_name)
+
+        with pysam.VariantFile(vcf_path, "wz", header=header) as vf:
+            for pos, gt in zip(variant_positions, gts):
+                dp = 60
+                alt_bc = 45 if gt == 1 else 5
+                ref_bc = dp - alt_bc
+
+                rec = vf.new_record()
+                rec.chrom = CHROM
+                rec.pos = pos
+                rec.ref = "A"
+                rec.alts = ("T",)
+                rec.qual = 60
+                rec.info["DP"] = dp
+                rec.info["BC"] = (ref_bc, 0, alt_bc, 0)
+                rec.info["MQ"] = 60
+                rec.samples[sample_name]["GT"] = (gt,)
+                vf.write(rec)
+
+        rc = subprocess.run(["bcftools", "index", str(vcf_path)], capture_output=True)
+        if rc.returncode != 0:
+            raise RuntimeError(
+                f"bcftools index failed for {vcf_path}: {rc.stderr.decode()}"
+            )
+        vcfs.append(vcf_path)
+
+    return tuple(vcfs)

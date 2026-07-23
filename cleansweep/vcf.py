@@ -262,6 +262,29 @@ def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
     except: 
         return None
 
+def remove_vcf_header_samples(header: str, samples: List[str]) -> str:
+    """Removes the given sample columns from the #CHROM line of a raw VCF header string.
+
+    Args:
+        header (str): Raw VCF header, as returned by VCF.get_header().
+        samples (List[str]): Sample names to remove from the #CHROM line.
+
+    Returns:
+        str: Header with the given samples removed from the #CHROM line.
+    """
+
+    if not samples:
+        return header
+
+    lines = header.split("\n")
+    chrom_idx = next(i for i, line in enumerate(lines) if line.startswith("#CHROM"))
+
+    lines[chrom_idx] = "\t".join(
+        f for f in lines[chrom_idx].split("\t") if f not in samples
+    )
+
+    return "\n".join(lines)
+
 def format_vcf_header(
     header: str,
     chrom: Union[None, str, List] = None,
@@ -297,10 +320,10 @@ def format_vcf_header(
             "##FILTER=<ID=LowAltBC,Description=\"Alternate allele depth is too low\">",
             "##FILTER=<ID=LowCov,Description=\"Coverage is too low\">",
             "##INFO=<ID=BC,Number=4,Type=Integer,Description=\"Base counts\">",
-            "##INFO=<ID=ORGFILT,Number=1,Type=String,Description=\"Original FILTER flag in the input VCF\">",
             "##INFO=<ID=CSP,Number=1,Type=Integer,Description=\"CleanSweep likelihood ratio for a variant being present in the query strain, log transformed\">",
             "##INFO=<ID=RD,Number=1,Type=Integer,Description=\"Reference allele base count\">",
             "##INFO=<ID=AD,Number=1,Type=Integer,Description=\"Main alternate allele base count\">",
+            "##INFO=<ID=PILON,Number=1,Type=String,Description=\"Original Pilon/variant caller FILTER flag\">"
         ]
         if add_filters
         else []

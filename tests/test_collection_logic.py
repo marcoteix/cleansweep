@@ -1,6 +1,7 @@
 """Unit tests for Collection logic — pandas DataFrames only, no file I/O."""
 import numpy as np
 import pandas as pd
+import pysam
 import pytest
 
 from cleansweep.collection import Collection
@@ -20,6 +21,79 @@ def col(tmp_path_factory):
         tmp_dir=d / "tmp",
         alpha=10.0,
     )
+
+
+@pytest.fixture(scope="module")
+def merged_vcf_with_outlier(tmp_path_factory):
+    """
+    A small, already-merged multi-sample VCF — the shape `merged_vcf_consensus_filter`
+    receives in production (post bcftools-merge/reheader). sampleA and sampleB share
+    identical genotypes at every site; sampleC is inverted at most sites, giving it a
+    much lower ANI to both, so it gets flagged as an outlier at low alpha values.
+    """
+    d = tmp_path_factory.mktemp("merged_outlier")
+    vcf_path = d / "merged.named.vcf"
+
+    chrom = "NZ_SYNTHETIC01.1"
+    n_sites = 20
+
+    header = pysam.VariantHeader()
+    header.add_line("##fileformat=VCFv4.2")
+    header.add_line(f"##contig=<ID={chrom},length=20000>")
+    header.add_line('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
+    for sample_name in ("sampleA", "sampleB", "sampleC"):
+        header.add_sample(sample_name)
+
+    genotypes = {
+        "sampleA": [1] * n_sites,
+        "sampleB": [1] * n_sites,
+        "sampleC": [0] * (n_sites - 2) + [1, 1],
+    }
+
+    with pysam.VariantFile(vcf_path, "w", header=header) as vf:
+        for i in range(n_sites):
+            rec = vf.new_record()
+            rec.chrom = chrom
+            rec.pos = 100 + i * 50
+            rec.ref = "A"
+            rec.alts = ("T",)
+            rec.qual = 60
+            for sample_name in ("sampleA", "sampleB", "sampleC"):
+                rec.samples[sample_name]["GT"] = (genotypes[sample_name][i],)
+            vf.write(rec)
+
+    return vcf_path
+
+
+class TestExcludeFlag:
+
+    def test_exclude_drops_outlier_sample_column(self, col, merged_vcf_with_outlier):
+        vcf_df, excluded = col.merged_vcf_consensus_filter(
+            vcf=merged_vcf_with_outlier, alpha=1.0, exclude=True
+        )
+        assert excluded == ["sampleC"]
+        assert "sampleC" not in vcf_df.columns
+        assert "sampleA" in vcf_df.columns
+        assert "sampleB" in vcf_df.columns
+
+    def test_without_exclude_keeps_outlier_sample_column(self, col, merged_vcf_with_outlier):
+        vcf_df, excluded = col.merged_vcf_consensus_filter(
+            vcf=merged_vcf_with_outlier, alpha=1.0, exclude=False
+        )
+        assert excluded == []
+        assert "sampleC" in vcf_df.columns
+
+    def test_exclude_log_without_exclude_raises(self, tmp_path_factory):
+        d = tmp_path_factory.mktemp("bad_exclude_log")
+        vcf_a = d / "a.vcf"
+        vcf_a.touch()
+        with pytest.raises(ValueError):
+            Collection(
+                vcfs=[vcf_a],
+                output=d / "out.vcf",
+                tmp_dir=d / "tmp",
+                exclude_log=d / "excluded.txt",
+            )
 
 
 class TestSnpDistance:

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 import subprocess
-from cleansweep.vcf import VCF, _VCF_HEADER, write_merged_vcf
+from cleansweep.vcf import VCF, _VCF_HEADER, write_merged_vcf, remove_vcf_header_samples
 from scipy.spatial.distance import pdist, squareform
 
 @dataclass
@@ -19,6 +19,8 @@ class Collection:
     tmp_dir: Directory
     alpha: float = 10.0
     min_coverage: int = 10
+    exclude: bool = False
+    exclude_log: Union[File, None] = None
 
     def __post_init__(self):
 
@@ -38,7 +40,12 @@ class Collection:
             raise ValueError(
                 f"Alpha must be greater than 0. Got {self.alpha}."
             )
-            
+
+        if self.exclude_log is not None and not self.exclude:
+            raise ValueError(
+                f"--exclude-log ({self.exclude_log}) was given without --exclude."
+            )
+
     def merge(self):
 
         gzvcfs = self.prepare_vcfs(
@@ -59,18 +66,32 @@ class Collection:
             output = self.tmp_dir.joinpath("merged.named.vcf")
         )
 
-        vcf = self.merged_vcf_consensus_filter(
+        vcf, excluded_samples = self.merged_vcf_consensus_filter(
             vcf = self.tmp_dir.joinpath("merged.named.vcf"),
-            alpha = self.alpha
+            alpha = self.alpha,
+            exclude = self.exclude
         )
+
+        header = VCF(
+            self.tmp_dir.joinpath("merged.named.vcf")
+        ).get_header()
+
+        if excluded_samples:
+            print(
+                f"Excluding {len(excluded_samples)} sample(s) from merged VCF: "
+                f"{', '.join(excluded_samples)}."
+            )
+            header = remove_vcf_header_samples(header, excluded_samples)
 
         write_merged_vcf(
             vcf = vcf,
             file = self.output,
-            header = VCF(
-                self.tmp_dir.joinpath("merged.named.vcf")
-            ).get_header()
+            header = header
         )
+
+        if self.exclude_log is not None:
+            with open(self.exclude_log, "w") as file:
+                file.write("\n".join(excluded_samples))
 
         #shutil.rmtree(self.tmp_dir)
     
@@ -193,8 +214,9 @@ class Collection:
     def merged_vcf_consensus_filter(
         self,
         vcf: File,
-        alpha: float = 10.0
-    ) -> pd.DataFrame:
+        alpha: float = 10.0,
+        exclude: bool = False
+    ) -> Tuple[pd.DataFrame, List[str]]:
         
         print("Applying consensus filter to merged VCF...")
         
@@ -261,7 +283,7 @@ class Collection:
         if len(max_ani_per_sample) < 2:
             # Single sample — no filtering possible
             vcf_df = vcf_df.assign(pos=vcf_df.pos.astype("Int64"))
-            return vcf_df
+            return vcf_df, []
 
         ani_median = float(np.median(max_ani_per_sample))
         ani_iqr = float(np.percentile(max_ani_per_sample, 75) - np.percentile(max_ani_per_sample, 25))
@@ -272,22 +294,49 @@ class Collection:
             f"threshold (median - {alpha}*IQR)={threshold:.6f}"
         )
 
-        # Get core SNPs once — reused for every sample that triggers filtering
-        consensus, is_core = self.core_snps(genotype)
+        # Samples with a maximum ANI below the threshold
+        flagged_samples = [
+            sample_name
+            for sample_name in ani_matrix.index
+            if float(max_ani_per_sample.loc[sample_name]) < threshold
+        ]
 
-        print(
-            f"Found {is_core.sum()} core SNPs out of {len(is_core)} total SNPs "
-            f"({is_core.mean()*100:.2f}%)."
-        )
+        if exclude:
 
-        for sample_name in ani_matrix.index:
+            if flagged_samples and len(flagged_samples) == len(ani_matrix.index):
+                raise ValueError(
+                    f"All {len(ani_matrix.index)} samples were flagged as ANI outliers "
+                    f"(below threshold {threshold:.6f}); cannot exclude every sample "
+                    "from the merged VCF. Consider increasing --alpha."
+                )
 
-            # Highest ANI this sample shares with any other sample
-            max_ani = float(
-                max_ani_per_sample.loc[sample_name]
+            for sample_name in flagged_samples:
+
+                max_ani = float(max_ani_per_sample.loc[sample_name])
+
+                print(
+                    f"Sample {sample_name} has a maximum ANI of {max_ani:.6f} to any other "
+                    f"sample, below the threshold of {threshold:.6f} "
+                    f"(median={ani_median:.6f}, IQR={ani_iqr:.6f}, alpha={alpha}). "
+                    f"Excluding sample."
+                )
+
+            genotype = genotype.drop(columns=flagged_samples)
+            excluded_samples = flagged_samples
+
+        else:
+
+            # Get core SNPs once — reused for every sample that triggers filtering
+            consensus, is_core = self.core_snps(genotype)
+
+            print(
+                f"Found {is_core.sum()} core SNPs out of {len(is_core)} total SNPs "
+                f"({is_core.mean()*100:.2f}%)."
             )
 
-            if max_ani < threshold:
+            for sample_name in flagged_samples:
+
+                max_ani = float(max_ani_per_sample.loc[sample_name])
 
                 print(
                     f"Sample {sample_name} has a maximum ANI of {max_ani:.6f} to any other "
@@ -312,6 +361,12 @@ class Collection:
                     }
                 )
 
+            excluded_samples = []
+
+        remaining_columns = [
+            c for c in vcf_df.columns if c not in excluded_samples
+        ]
+
         vcf_df = genotype.join(
             vcf_df[
                 vcf_df.columns \
@@ -319,14 +374,14 @@ class Collection:
             ].set_index(
                 ["chrom", "pos"]
             )
-        ).reset_index()[vcf_df.columns]
+        ).reset_index()[remaining_columns]
 
         vcf_df = vcf_df.assign(
             pos = vcf_df.pos.astype("Int64")
         )
 
-        return vcf_df
-    
+        return vcf_df, excluded_samples
+
     def genome_lengths_from_vcf(
         self,
         vcf: File,
