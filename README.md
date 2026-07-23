@@ -104,7 +104,7 @@ SNVs trully present in the target strain will have a value of ``PASS`` in the ``
 
 ### Further filtering for a collection of samples 
 
-If you have run `cleansweep filter` on multiple plate swipes targeting the same strain, you can merge the resulting VCFs into a single multi-sample VCF with `cleansweep collection`. This step also removes sample-private variants from samples that are outliers in terms of ANI — i.e., samples that are unexpectedly dissimilar from all others, which may indicate insufficient filtering with `cleansweep filter`.
+If you have run `cleansweep filter` on multiple plate swipes targeting the same strain, you can merge the resulting VCFs into a single multi-sample VCF with `cleansweep collection`. This step detects samples that are unexpectedly dissimilar from all others in the dataset — likely indicating insufficient filtering by `cleansweep filter` — and either removes their sample-private variants or excludes them from the output entirely.
 
 ```
 cleansweep collection \
@@ -119,9 +119,42 @@ cleansweep collection \
 
 **How the outlier filter works:**
 
-1. For each sample in the merged VCF, CleanSweep computes the maximum ANI to other samples in the dataset. This results in a distribution of ANIs to the most similar sample in the dataset.
-2. The median and interquartile range (IQR) of these ANIs are computed.
-3. For each sample, the highest ANI it shares with any other sample is checked.
-4. If that maximum ANI falls below `median - alpha × IQR`, the sample is flagged as a divergent outlier and its sample-private variants (i.e., variants that only occur in that sample and not in any other sample in the dataset) are replaced with the per-site consensus of the remaining samples.
+1. For each sample in the merged VCF, CleanSweep computes the maximum ANI to any other sample in the dataset, producing one value per sample.
+2. The median and interquartile range (IQR) of these per-sample maximum ANIs are computed.
+3. Any sample whose maximum ANI falls below `median - alpha × IQR` is flagged as a divergent outlier.
+4. By default, flagged samples are cleaned in place: their sample-private variants (variants that appear only in that sample) are replaced with the per-site consensus genotype of the remaining samples.
 
-`--alpha` controls how aggressively outliers are detected. Larger values (default: 10) are more permissive and only flag extreme outliers; smaller values trigger further filtering for more samples.
+`--alpha` controls how aggressively outliers are detected. Larger values (default: 10) are more permissive and only flag extreme outliers; smaller values flag more samples.
+
+**Excluding outlier samples instead of cleaning them**
+
+Use `--exclude` to remove flagged samples from the merged VCF entirely rather than cleaning them:
+
+```
+cleansweep collection \
+    sample1/cleansweep.variants.vcf.gz \
+    sample2/cleansweep.variants.vcf.gz \
+    sample3/cleansweep.variants.vcf.gz \
+    --output merged.vcf \
+    --tmp-dir tmp/ \
+    --alpha 10 \
+    --exclude
+```
+
+When `--exclude` is set, flagged samples are dropped from the output VCF. Samples that are not flagged are unaffected.
+
+To record which samples were excluded, pass a file path to `--exclude-log`:
+
+```
+cleansweep collection \
+    sample1/cleansweep.variants.vcf.gz \
+    sample2/cleansweep.variants.vcf.gz \
+    sample3/cleansweep.variants.vcf.gz \
+    --output merged.vcf \
+    --tmp-dir tmp/ \
+    --alpha 10 \
+    --exclude \
+    --exclude-log excluded_samples.txt
+```
+
+CleanSweep will write the sample IDs of excluded samples to `excluded_samples.txt`, one per line. `--exclude-log` requires `--exclude` to be set.
