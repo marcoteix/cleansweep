@@ -23,8 +23,12 @@ class CollectionCmd(Subcommand):
 
         io_grp.add_argument("input", type=str, nargs="+", help="CleanSweep VCFs to merge.")
         io_grp.add_argument("--output", "-o", type=str, help="Output VCF file.")
-        io_grp.add_argument("--tmp-dir", type=str, default="tmp/", 
+        io_grp.add_argument("--tmp-dir", type=str, default="tmp/",
             help="Temporary directory. Defaults to %(default)s.")
+        io_grp.add_argument("--exclude-log", type=str, default=None,
+            help="Path to write the IDs of samples excluded from the merged VCF (one "
+            "per line). Only meaningful together with --exclude; raises an error if "
+            "given without it. Defaults to no log file.")
 
         params_grp = parser.add_argument_group(
             "Filtering options",
@@ -38,10 +42,15 @@ class CollectionCmd(Subcommand):
             "all maximum ANIs - , variants occurring in no other sample are excluded. Larger "
             "values are more permissive. Must be > 0. Defaults to %(default)s.")
         
-        params_grp.add_argument("--min-coverage", "-c", type=int, default=10, 
+        params_grp.add_argument("--min-coverage", "-c", type=int, default=10,
             help="Minimum coverage needed for a site to be included. Sites with lower \
 coverage are represented as N in the multi-sequence alignment. Defaults to %(default)s.")
-        
+
+        params_grp.add_argument("--exclude", action="store_true", default=False,
+            help="Instead of removing sample-private (non-core) SNPs from samples with an "
+            "abnormally low maximum ANI to all other samples, remove those samples "
+            "entirely from the merged output VCF. Defaults to %(default)s.")
+
     def run(
         self,
         input: List[File],
@@ -49,20 +58,24 @@ coverage are represented as N in the multi-sequence alignment. Defaults to %(def
         tmp_dir: Directory,
         alpha: float,
         min_coverage: int,
+        exclude: bool,
+        exclude_log: Union[File, None],
         **kwargs
     ):
-        
+
         print(
             f"Merging VCFs {', '.join([str(x) for x in input])} "
-            f"(alpha={alpha}). Writing output to {str(output)}..."
+            f"(alpha={alpha}, exclude={exclude}). Writing output to {str(output)}..."
         )
-        
+
         Collection(
             vcfs = input,
             output = output,
             tmp_dir = tmp_dir,
             alpha = alpha,
-            min_coverage = min_coverage
+            min_coverage = min_coverage,
+            exclude = exclude,
+            exclude_log = exclude_log
         ).merge()
         
         logging.info("Done!")
