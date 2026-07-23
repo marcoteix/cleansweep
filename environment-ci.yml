@@ -12,6 +12,7 @@ dependencies:
   - pandas
   - joblib
   - biopython
+  - matplotlib=3.10
   - pymc=5.12.0
   - arviz=0.21.0
   - pytensor
