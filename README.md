@@ -1,5 +1,8 @@
 # CleanSweep
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/marcoteix/cleansweep/tests.yml?branch=main&label=tests)](https://github.com/marcoteix/cleansweep/actions/workflows/tests.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/marcoteix/cleansweep?label=coverage)](https://codecov.io/gh/marcoteix/cleansweep)
+
 Finds strain-specific single nucleotide variants from plate swipe data.
 
 CleanSweep leverages allele coverage depths to call strain-specific single-nucleotide variants from short-read plate swipe data. It calls variants along the entire genome of target strains. Thus, CleanSweep allows genetic distances to be estimated using a common reference across samples.
@@ -102,46 +105,45 @@ This command will create four files in ``./cleansweep``:
 SNVs trully present in the target strain will have a value of ``PASS`` in the ``FILTER`` field in ``cleansweep.variants.vcf``.
 
 
-### Further filtering for a collection of samples 
+### Further filtering for a collection of samples
 
-If you have run `cleansweep filter` on multiple plate swipes targeting the same strain, you can merge the resulting VCFs into a single multi-sample VCF with `cleansweep collection`. This step detects samples that are unexpectedly dissimilar from all others in the dataset — likely indicating insufficient filtering by `cleansweep filter` — and either removes their sample-private variants or excludes them from the output entirely.
+If you have run `cleansweep filter` on multiple plate swipes targeting the same strain, you can build a multiple sequence alignment (MSA) in FASTA format with `cleansweep collection`. This step converts each per-sample VCF to a nucleotide sequence, detects samples that are unexpectedly dissimilar from all others — likely indicating insufficient filtering by `cleansweep filter` — and either removes their sample-private SNPs or excludes them from the MSA entirely.
 
 ```
 cleansweep collection \
     sample1/cleansweep.variants.vcf.gz \
     sample2/cleansweep.variants.vcf.gz \
     sample3/cleansweep.variants.vcf.gz \
-    --output merged.vcf \
-    --tmp-dir tmp/ \
+    --output collection.fasta \
     --alpha 10 \
     --min-coverage 10
 ```
 
 **How the outlier filter works:**
 
-1. For each sample in the merged VCF, CleanSweep computes the maximum ANI to any other sample in the dataset, producing one value per sample.
-2. The median and interquartile range (IQR) of these per-sample maximum ANIs are computed.
-3. Any sample whose maximum ANI falls below `median - alpha × IQR` is flagged as a divergent outlier.
-4. By default, flagged samples are cleaned in place: their sample-private variants (variants that appear only in that sample) are replaced with the per-site consensus genotype of the remaining samples.
+1. Each per-sample VCF is converted to a nucleotide sequence. Positions with coverage below `--min-coverage` are encoded as `N`.
+2. For each sample, CleanSweep computes the maximum ANI to any other sample in the dataset, producing one value per sample.
+3. The median and interquartile range (IQR) of these per-sample maximum ANIs are computed.
+4. Any sample whose maximum ANI falls below `median - alpha × IQR` is flagged as a divergent outlier.
+5. By default, flagged samples are cleaned in place: their sample-private SNPs (positions differing from all other samples) are replaced with the per-site consensus base of the remaining samples.
 
 `--alpha` controls how aggressively outliers are detected. Larger values (default: 10) are more permissive and only flag extreme outliers; smaller values flag more samples.
 
 **Excluding outlier samples instead of cleaning them**
 
-Use `--exclude` to remove flagged samples from the merged VCF entirely rather than cleaning them:
+Use `--exclude` to remove flagged samples from the MSA entirely rather than cleaning them:
 
 ```
 cleansweep collection \
     sample1/cleansweep.variants.vcf.gz \
     sample2/cleansweep.variants.vcf.gz \
     sample3/cleansweep.variants.vcf.gz \
-    --output merged.vcf \
-    --tmp-dir tmp/ \
+    --output collection.fasta \
     --alpha 10 \
     --exclude
 ```
 
-When `--exclude` is set, flagged samples are dropped from the output VCF. Samples that are not flagged are unaffected.
+When `--exclude` is set, flagged samples are dropped from the output FASTA. Samples that are not flagged are unaffected.
 
 To record which samples were excluded, pass a file path to `--exclude-log`:
 
@@ -150,8 +152,7 @@ cleansweep collection \
     sample1/cleansweep.variants.vcf.gz \
     sample2/cleansweep.variants.vcf.gz \
     sample3/cleansweep.variants.vcf.gz \
-    --output merged.vcf \
-    --tmp-dir tmp/ \
+    --output collection.fasta \
     --alpha 10 \
     --exclude \
     --exclude-log excluded_samples.txt

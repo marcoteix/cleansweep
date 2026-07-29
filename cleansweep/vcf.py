@@ -14,7 +14,25 @@ from cleansweep.typing import File
 from cleansweep.__version__ import __version__
 
 _VCF_HEADER = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "info", "format", "sample"]
-
+IUPAC_CODES = {
+    "A": "A",
+    "C": "C",
+    "G": "G",
+    "T": "T",
+    "N": "N",
+    "AG": "R",
+    "CT": "Y",
+    "CG": "S",
+    "AT": "W",
+    "GT": "K",
+    "AC": "M",
+    "CGT": "B",
+    "AGT": "D",
+    "ACT": "H",
+    "ACG": "V",
+    ".": ".",
+    "-": "-",
+}
 
 @dataclass
 class VCF:

@@ -1,18 +1,14 @@
 name: Docker Image CI
 
 on:
-  push:
-  merge_group:
-  pull_request:
-    branches:
-      - main
-  release:
+  pull_request_review:
     types:
-      - created
+      - submitted
 
 jobs:
 
   build:
+    if: github.event.review.state == 'approved'
 
     runs-on: ubuntu-latest
 

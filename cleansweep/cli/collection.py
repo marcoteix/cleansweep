@@ -7,11 +7,21 @@ from cleansweep.collection import Collection
 from cleansweep.typing import File, Directory
 
 class CollectionCmd(Subcommand):
-    """Merges a set of CleanSweep output VCFs.
+    """Creates a multisequence alignment (MSA) if FASTA format from a set of 
+    CleanSweep VCFs.
 
-    It further filters variants in samples with unreasonable low ANIs with
-    other samples, keeping only SNPs occuring in at least two samples. Produces
-    a multi-sample VCF with the filtered variants.
+    Samples that are identified as outliers based on their pairwise 
+    similarities will be excluded from the MSA or have their private SNPs removed, 
+    depending on the `--exclude` flag.
+
+    If `--exclude` is not set (default), this method looks for outlier samples: it 
+    calculates the maximum average nucleotide identity (ANI) each sample shares with
+    any other sample. If a sample's maximum ANI is below the threshold defined by
+    the median minus `alpha` times the interquartile range (IQR) of the maximum ANI 
+    values, it is considered an outlier. For each outlier sample, any SNPs that are 
+    not shared with at least one other sample (i.e., private SNPs) are removed.
+
+    If `--exclude` is set, outlier samples are completely excluded from the MSA.
     """
 
     def add_arguments(self, parser: argparse.ArgumentParser):
@@ -22,11 +32,9 @@ class CollectionCmd(Subcommand):
         )
 
         io_grp.add_argument("input", type=str, nargs="+", help="CleanSweep VCFs to merge.")
-        io_grp.add_argument("--output", "-o", type=str, help="Output VCF file.")
-        io_grp.add_argument("--tmp-dir", type=str, default="tmp/",
-            help="Temporary directory. Defaults to %(default)s.")
+        io_grp.add_argument("--output", "-o", type=str, help="Output MSA file.")
         io_grp.add_argument("--exclude-log", type=str, default=None,
-            help="Path to write the IDs of samples excluded from the merged VCF (one "
+            help="Path to write the IDs of samples excluded from the MSA (one "
             "per line). Only meaningful together with --exclude; raises an error if "
             "given without it. Defaults to no log file.")
 
@@ -49,34 +57,37 @@ coverage are represented as N in the multi-sequence alignment. Defaults to %(def
         params_grp.add_argument("--exclude", action="store_true", default=False,
             help="Instead of removing sample-private (non-core) SNPs from samples with an "
             "abnormally low maximum ANI to all other samples, remove those samples "
-            "entirely from the merged output VCF. Defaults to %(default)s.")
+            "entirely from the MSA. Defaults to %(default)s.")
+        
+        parser.add_argument("--n-threads", "-t", type=int, default=1,
+            help="Number of threads to use for parallel processing. Defaults to %(default)s.")
 
     def run(
         self,
         input: List[File],
         output: File,
-        tmp_dir: Directory,
         alpha: float,
         min_coverage: int,
         exclude: bool,
         exclude_log: Union[File, None],
+        n_threads: int,
         **kwargs
     ):
 
         print(
-            f"Merging VCFs {', '.join([str(x) for x in input])} "
+            f"Creating MSA from VCFs {', '.join([str(x) for x in input])} "
             f"(alpha={alpha}, exclude={exclude}). Writing output to {str(output)}..."
         )
 
         Collection(
-            vcfs = input,
-            output = output,
-            tmp_dir = tmp_dir,
-            alpha = alpha,
-            min_coverage = min_coverage,
-            exclude = exclude,
-            exclude_log = exclude_log
-        ).merge()
+            vcfs=input,
+            output=output,
+            alpha=alpha,
+            min_coverage=min_coverage,
+            exclude=exclude,
+            exclude_log=exclude_log,
+            n_threads=n_threads
+        ).msa()
         
         logging.info("Done!")
         

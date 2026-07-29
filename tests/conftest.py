@@ -4,6 +4,7 @@ Pytest fixtures for CleanSweep tests.
 All synthetic data is created in a temporary directory shared across the
 entire test session (session scope). No fixture reads from real data files.
 """
+import gzip
 import subprocess
 import tempfile
 from pathlib import Path
@@ -252,3 +253,58 @@ def synthetic_collection_vcfs_with_outlier(session_tmpdir):
         vcfs.append(vcf_path)
 
     return tuple(vcfs)
+
+
+# ---------------------------------------------------------------------------
+# Synthetic FASTA files for prepare tests
+# ---------------------------------------------------------------------------
+
+def _write_fasta(path: Path, name: str, seq: str):
+    with open(path, "w") as f:
+        f.write(f">{name}\n")
+        for i in range(0, len(seq), 80):
+            f.write(seq[i:i + 80] + "\n")
+
+
+@pytest.fixture(scope="session")
+def synthetic_target_fasta(session_tmpdir) -> Path:
+    """10 kb synthetic target FASTA."""
+    rng = np.random.default_rng(101)
+    seq = "".join(rng.choice(list("ACGT"), size=10_000).tolist())
+    path = session_tmpdir / "prepare_target.fa"
+    _write_fasta(path, "synthetic_target", seq)
+    return path
+
+
+@pytest.fixture(scope="session")
+def synthetic_background_fastas(session_tmpdir) -> list:
+    """Two 10 kb synthetic background FASTAs (different random seeds)."""
+    paths = []
+    for i, seed in enumerate([202, 303]):
+        rng = np.random.default_rng(seed)
+        seq = "".join(rng.choice(list("ACGT"), size=10_000).tolist())
+        path = session_tmpdir / f"prepare_background_{i + 1}.fa"
+        _write_fasta(path, f"synthetic_background_{i + 1}", seq)
+        paths.append(path)
+    return paths
+
+
+@pytest.fixture(scope="session")
+def synthetic_target_fasta_gz(session_tmpdir, synthetic_target_fasta) -> Path:
+    """Gzipped version of the synthetic target FASTA."""
+    gz_path = session_tmpdir / "prepare_target.fa.gz"
+    with open(synthetic_target_fasta, "rb") as src, gzip.open(gz_path, "wb") as dst:
+        dst.write(src.read())
+    return gz_path
+
+
+@pytest.fixture(scope="session")
+def synthetic_background_fastas_gz(session_tmpdir, synthetic_background_fastas) -> list:
+    """Gzipped versions of the synthetic background FASTAs."""
+    gz_paths = []
+    for p in synthetic_background_fastas:
+        gz_path = session_tmpdir / (p.name + ".gz")
+        with open(p, "rb") as src, gzip.open(gz_path, "wb") as dst:
+            dst.write(src.read())
+        gz_paths.append(gz_path)
+    return gz_paths

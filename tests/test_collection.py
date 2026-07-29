@@ -1,18 +1,12 @@
-"""Integration tests for `cleansweep collection` CLI."""
+"""Integration tests for `cleansweep collection` CLI — FASTA output."""
 import subprocess
 from pathlib import Path
 
 
-def _chrom_line(vcf_path):
-    with open(vcf_path) as f:
-        for line in f:
-            if line.startswith("#CHROM"):
-                return line.rstrip("\n")
-    raise AssertionError(f"No #CHROM line found in {vcf_path}")
-
-
-def _sample_names(vcf_path):
-    return _chrom_line(vcf_path).split("\t")[9:]
+def _fasta_names(fasta_path):
+    """Return the list of sequence names from a FASTA file (lines starting with '>')."""
+    with open(fasta_path) as f:
+        return [line.strip()[1:] for line in f if line.startswith(">")]
 
 
 class TestCollectionCLI:
@@ -24,24 +18,36 @@ class TestCollectionCLI:
         cmd = [
             "cleansweep", "collection",
             str(vcf_a), str(vcf_b),
-            "--output", str(tmp_path / "merged.vcf"),
-            "--tmp-dir", str(tmp_path / "tmp"),
+            "--output", str(tmp_path / "out.fasta"),
         ] + self._base_opts
         rc = subprocess.run(cmd, capture_output=True)
         assert rc.returncode == 0, rc.stderr.decode()
 
-    def test_creates_nonempty_output_vcf(self, synthetic_collection_vcfs, tmp_path):
+    def test_creates_nonempty_output_fasta(self, synthetic_collection_vcfs, tmp_path):
         vcf_a, vcf_b = synthetic_collection_vcfs
-        output = tmp_path / "merged2.vcf"
+        output = tmp_path / "out2.fasta"
         cmd = [
             "cleansweep", "collection",
             str(vcf_a), str(vcf_b),
             "--output", str(output),
-            "--tmp-dir", str(tmp_path / "tmp2"),
         ] + self._base_opts
         subprocess.run(cmd, capture_output=True, check=True)
         assert output.exists()
         assert output.stat().st_size > 0
+
+    def test_output_contains_both_samples(self, synthetic_collection_vcfs, tmp_path):
+        vcf_a, vcf_b = synthetic_collection_vcfs
+        name_a, name_b = Path(vcf_a).stem, Path(vcf_b).stem
+        output = tmp_path / "out3.fasta"
+        cmd = [
+            "cleansweep", "collection",
+            str(vcf_a), str(vcf_b),
+            "--output", str(output),
+        ] + self._base_opts
+        subprocess.run(cmd, capture_output=True, check=True)
+        names = _fasta_names(output)
+        assert name_a in names
+        assert name_b in names
 
 
 class TestCollectionExcludeCLI:
@@ -53,45 +59,37 @@ class TestCollectionExcludeCLI:
     ):
         vcf_a, vcf_b, vcf_c = synthetic_collection_vcfs_with_outlier
         name_a, name_b, name_c = (Path(v).stem for v in (vcf_a, vcf_b, vcf_c))
-        output = tmp_path / "merged.exclude.vcf"
+        output = tmp_path / "exclude.fasta"
         cmd = [
             "cleansweep", "collection",
             str(vcf_a), str(vcf_b), str(vcf_c),
             "--output", str(output),
-            "--tmp-dir", str(tmp_path / "tmp"),
             "--exclude",
         ] + self._base_opts
         rc = subprocess.run(cmd, capture_output=True)
         assert rc.returncode == 0, rc.stderr.decode()
 
-        samples = _sample_names(output)
-        assert name_c not in samples
-        assert name_a in samples
-        assert name_b in samples
-
-        # Header sample count must match the data rows' column count, or the
-        # output VCF is malformed.
-        with open(output) as f:
-            data_line = next(line for line in f if not line.startswith("#"))
-        assert len(data_line.rstrip("\n").split("\t")) == len(_chrom_line(output).split("\t"))
+        names = _fasta_names(output)
+        assert name_c not in names
+        assert name_a in names
+        assert name_b in names
 
     def test_without_exclude_keeps_all_samples(
         self, synthetic_collection_vcfs_with_outlier, tmp_path
     ):
         vcf_a, vcf_b, vcf_c = synthetic_collection_vcfs_with_outlier
         expected = {Path(v).stem for v in (vcf_a, vcf_b, vcf_c)}
-        output = tmp_path / "merged.noexclude.vcf"
+        output = tmp_path / "noexclude.fasta"
         cmd = [
             "cleansweep", "collection",
             str(vcf_a), str(vcf_b), str(vcf_c),
             "--output", str(output),
-            "--tmp-dir", str(tmp_path / "tmp2"),
         ] + self._base_opts
         rc = subprocess.run(cmd, capture_output=True)
         assert rc.returncode == 0, rc.stderr.decode()
 
-        samples = _sample_names(output)
-        assert set(samples) == expected
+        names = _fasta_names(output)
+        assert set(names) == expected
 
     def test_exclude_log_records_excluded_sample(
         self, synthetic_collection_vcfs_with_outlier, tmp_path
@@ -102,8 +100,7 @@ class TestCollectionExcludeCLI:
         cmd = [
             "cleansweep", "collection",
             str(vcf_a), str(vcf_b), str(vcf_c),
-            "--output", str(tmp_path / "merged.log.vcf"),
-            "--tmp-dir", str(tmp_path / "tmp3"),
+            "--output", str(tmp_path / "log.fasta"),
             "--exclude",
             "--exclude-log", str(exclude_log),
         ] + self._base_opts
@@ -120,8 +117,7 @@ class TestCollectionExcludeCLI:
         cmd = [
             "cleansweep", "collection",
             str(vcf_a), str(vcf_b), str(vcf_c),
-            "--output", str(tmp_path / "merged.bad.vcf"),
-            "--tmp-dir", str(tmp_path / "tmp4"),
+            "--output", str(tmp_path / "bad.fasta"),
             "--exclude-log", str(tmp_path / "excluded_bad.txt"),
         ] + self._base_opts
         rc = subprocess.run(cmd, capture_output=True)

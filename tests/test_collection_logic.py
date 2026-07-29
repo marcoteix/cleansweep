@@ -1,11 +1,13 @@
-"""Unit tests for Collection logic — pandas DataFrames only, no file I/O."""
+"""Unit tests for Collection logic — no CLI, no multi-process I/O."""
 import numpy as np
-import pandas as pd
-import pysam
 import pytest
 
 from cleansweep.collection import Collection
 
+
+# ---------------------------------------------------------------------------
+# Shared fixture
+# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def col(tmp_path_factory):
@@ -17,250 +19,194 @@ def col(tmp_path_factory):
     vcf_b.touch()
     return Collection(
         vcfs=[vcf_a, vcf_b],
-        output=d / "out.vcf",
-        tmp_dir=d / "tmp",
+        output=d / "out.fasta",
         alpha=10.0,
+        n_threads=1,
     )
 
 
+# ---------------------------------------------------------------------------
+# Minimal VCF fixture for vcf_to_seq tests
+# ---------------------------------------------------------------------------
+
 @pytest.fixture(scope="module")
-def merged_vcf_with_outlier(tmp_path_factory):
+def simple_vcf(tmp_path_factory):
     """
-    A small, already-merged multi-sample VCF — the shape `merged_vcf_consensus_filter`
-    receives in production (post bcftools-merge/reheader). sampleA and sampleB share
-    identical genotypes at every site; sampleC is inverted at most sites, giving it a
-    much lower ANI to both, so it gets flagged as an outlier at low alpha values.
+    Plain-text VCF with 3 SNP positions:
+      pos 1 → alt (T), depth 30
+      pos 2 → ref (C), depth 30
+      pos 3 → alt (T), depth 5  (below min_dp=10 → N)
+    Expected sequence: "TCN"
     """
-    d = tmp_path_factory.mktemp("merged_outlier")
-    vcf_path = d / "merged.named.vcf"
-
-    chrom = "NZ_SYNTHETIC01.1"
-    n_sites = 20
-
-    header = pysam.VariantHeader()
-    header.add_line("##fileformat=VCFv4.2")
-    header.add_line(f"##contig=<ID={chrom},length=20000>")
-    header.add_line('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
-    for sample_name in ("sampleA", "sampleB", "sampleC"):
-        header.add_sample(sample_name)
-
-    genotypes = {
-        "sampleA": [1] * n_sites,
-        "sampleB": [1] * n_sites,
-        "sampleC": [0] * (n_sites - 2) + [1, 1],
-    }
-
-    with pysam.VariantFile(vcf_path, "w", header=header) as vf:
-        for i in range(n_sites):
-            rec = vf.new_record()
-            rec.chrom = chrom
-            rec.pos = 100 + i * 50
-            rec.ref = "A"
-            rec.alts = ("T",)
-            rec.qual = 60
-            for sample_name in ("sampleA", "sampleB", "sampleC"):
-                rec.samples[sample_name]["GT"] = (genotypes[sample_name][i],)
-            vf.write(rec)
-
-    return vcf_path
+    d = tmp_path_factory.mktemp("vcf_seq")
+    p = d / "simple.vcf"
+    p.write_text(
+        "##fileformat=VCFv4.2\n"
+        "##contig=<ID=CHR1,length=3>\n"
+        '##INFO=<ID=DP,Number=1,Type=Integer,Description="Depth">\n'
+        '##INFO=<ID=BC,Number=4,Type=Integer,Description="Base counts A,C,G,T">\n'
+        '##INFO=<ID=MQ,Number=1,Type=Integer,Description="Mapping quality">\n'
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+        "CHR1\t1\t.\tA\tT\t60\tPASS\tDP=30;BC=0,0,0,30;MQ=60\tGT\t1\n"
+        "CHR1\t2\t.\tC\tG\t60\tPASS\tDP=30;BC=30,0,0,0;MQ=60\tGT\t0\n"
+        "CHR1\t3\t.\tA\tT\t60\tPASS\tDP=5;BC=0,0,0,5;MQ=60\tGT\t1\n"
+    )
+    return p
 
 
-class TestExcludeFlag:
+# ---------------------------------------------------------------------------
+# TestVcfToSeq
+# ---------------------------------------------------------------------------
 
-    def test_exclude_drops_outlier_sample_column(self, col, merged_vcf_with_outlier):
-        vcf_df, excluded = col.merged_vcf_consensus_filter(
-            vcf=merged_vcf_with_outlier, alpha=1.0, exclude=True
+class TestVcfToSeq:
+
+    def test_alt_base_written(self, col, simple_vcf):
+        seq = col.vcf_to_seq(vcf=simple_vcf, min_dp=10)
+        assert seq[0] == "T", "pos 1 has GT=1 (alt=T)"
+
+    def test_ref_base_written(self, col, simple_vcf):
+        seq = col.vcf_to_seq(vcf=simple_vcf, min_dp=10)
+        assert seq[1] == "C", "pos 2 has GT=0 (ref=C)"
+
+    def test_low_depth_written_as_n(self, col, simple_vcf):
+        seq = col.vcf_to_seq(vcf=simple_vcf, min_dp=10)
+        assert seq[2] == "N", "pos 3 has depth 5 < min_dp=10"
+
+    def test_full_sequence(self, col, simple_vcf):
+        assert col.vcf_to_seq(vcf=simple_vcf, min_dp=10) == "TCN"
+
+    def test_sequence_length_equals_last_pos(self, col, simple_vcf):
+        seq = col.vcf_to_seq(vcf=simple_vcf, min_dp=10)
+        assert len(seq) == 3
+
+    def test_named_sample_column_works(self, col, tmp_path_factory):
+        """vcf_to_seq must work when the sample column is not literally 'SAMPLE'."""
+        d = tmp_path_factory.mktemp("named_sample")
+        p = d / "named.vcf"
+        p.write_text(
+            "##fileformat=VCFv4.2\n"
+            "##contig=<ID=CHR1,length=2>\n"
+            '##INFO=<ID=DP,Number=1,Type=Integer,Description="Depth">\n'
+            '##INFO=<ID=BC,Number=4,Type=Integer,Description="Base counts A,C,G,T">\n'
+            '##INFO=<ID=MQ,Number=1,Type=Integer,Description="Mapping quality">\n'
+            '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tmySample\n"
+            "CHR1\t1\t.\tA\tT\t60\tPASS\tDP=30;BC=0,0,0,30;MQ=60\tGT\t1\n"
+            "CHR1\t2\t.\tC\tG\t60\tPASS\tDP=30;BC=30,0,0,0;MQ=60\tGT\t0\n"
         )
-        assert excluded == ["sampleC"]
-        assert "sampleC" not in vcf_df.columns
-        assert "sampleA" in vcf_df.columns
-        assert "sampleB" in vcf_df.columns
-
-    def test_without_exclude_keeps_outlier_sample_column(self, col, merged_vcf_with_outlier):
-        vcf_df, excluded = col.merged_vcf_consensus_filter(
-            vcf=merged_vcf_with_outlier, alpha=1.0, exclude=False
-        )
-        assert excluded == []
-        assert "sampleC" in vcf_df.columns
-
-    def test_exclude_log_without_exclude_raises(self, tmp_path_factory):
-        d = tmp_path_factory.mktemp("bad_exclude_log")
-        vcf_a = d / "a.vcf"
-        vcf_a.touch()
-        with pytest.raises(ValueError):
-            Collection(
-                vcfs=[vcf_a],
-                output=d / "out.vcf",
-                tmp_dir=d / "tmp",
-                exclude_log=d / "excluded.txt",
-            )
+        seq = col.vcf_to_seq(vcf=p, min_dp=10)
+        assert seq == "TC"
 
 
-class TestSnpDistance:
+# ---------------------------------------------------------------------------
+# TestFindOutliers
+# ---------------------------------------------------------------------------
 
-    def test_identical_series_returns_zero(self, col):
-        s = pd.Series(["1", "0", "1", "0", "."])
-        assert col.snp_distance(s, s) == 0
+class TestFindOutliers:
 
-    def test_missing_positions_excluded(self, col):
-        s1 = pd.Series(["1", ".", "0"])
-        s2 = pd.Series(["0", "0", "0"])
-        # pos 0 differs, pos 1 skipped (s1='.'), pos 2 same
-        assert col.snp_distance(s1, s2) == 1
+    def test_single_sequence_returns_empty(self, col):
+        assert col.find_outliers({"s1": "AAAA"}) == []
 
-    def test_both_missing_excluded(self, col):
-        s1 = pd.Series([".", "1"])
-        s2 = pd.Series([".", "0"])
-        assert col.snp_distance(s1, s2) == 1
+    def test_two_identical_no_outlier(self, col):
+        seqs = {"s1": "AAAA", "s2": "AAAA"}
+        assert col.find_outliers(seqs, alpha=1.0) == []
 
-    def test_all_missing_returns_zero(self, col):
-        s1 = pd.Series([".", "."])
-        s2 = pd.Series([".", "."])
-        assert col.snp_distance(s1, s2) == 0
+    def test_divergent_sample_flagged(self, col):
+        similar = "A" * 50
+        outlier = "T" * 50
+        seqs = {f"s{i}": similar for i in range(4)}
+        seqs["sOUT"] = outlier
+        result = col.find_outliers(seqs, alpha=1.0)
+        assert "sOUT" in result
+        assert all(f"s{i}" not in result for i in range(4))
 
-    def test_known_difference_count(self, col):
-        s1 = pd.Series(["1", "0", "1", "1", "0"])
-        s2 = pd.Series(["1", "0", "0", "0", "1"])
-        assert col.snp_distance(s1, s2) == 3
-
-
-class TestSnpMatrix:
-
-    def test_diagonal_is_zero(self, col):
-        geno = pd.DataFrame({"sA": ["1", "0", "1"], "sB": ["0", "1", "0"]})
-        mat = col.snp_matrix(geno)
-        assert mat.loc["sA", "sA"] == 0
-        assert mat.loc["sB", "sB"] == 0
-
-    def test_symmetric(self, col):
-        geno = pd.DataFrame({
-            "sA": ["1", "0", "1"],
-            "sB": ["0", "1", "1"],
-            "sC": ["0", "0", "1"],
-        })
-        mat = col.snp_matrix(geno)
-        assert mat.loc["sA", "sB"] == mat.loc["sB", "sA"]
-        assert mat.loc["sA", "sC"] == mat.loc["sC", "sA"]
-
-    def test_known_distances(self, col):
-        geno = pd.DataFrame({"sA": ["1", "0"], "sB": ["0", "1"]})
-        mat = col.snp_matrix(geno)
-        assert mat.loc["sA", "sB"] == 2
-
-    def test_column_and_index_names(self, col):
-        geno = pd.DataFrame({"x": ["1"], "y": ["0"], "z": ["1"]})
-        mat = col.snp_matrix(geno)
-        assert list(mat.columns) == ["x", "y", "z"]
-        assert list(mat.index) == ["x", "y", "z"]
-
-
-class TestCoreSnps:
-
-    def test_private_snp_not_core(self, col):
-        """SNP in only 1 of 3 samples → not core."""
-        geno = pd.DataFrame({"sA": ["1"], "sB": ["0"], "sC": ["0"]})
-        _, mask = col.core_snps(geno)
-        assert not mask.iloc[0]
-
-    def test_all_samples_alt_is_core(self, col):
-        """All samples have alt → n_samples == n_pass → core."""
-        geno = pd.DataFrame({"sA": ["1"], "sB": ["1"], "sC": ["1"]})
-        _, mask = col.core_snps(geno)
-        assert mask.iloc[0]
-
-    def test_single_passing_sample_is_not_core(self, col):
-        """Only 1 sample has data (n_pass == 1) → not core."""
-        geno = pd.DataFrame({"sA": ["1"], "sB": ["."], "sC": ["."]})
-        _, mask = col.core_snps(geno)
-        assert not mask.iloc[0]
-
-    def test_snp_in_two_of_five_is_core(self, col):
-        """2/5 samples have alt → 1 < n_samples < n_pass-1 → core."""
-        geno = pd.DataFrame({
-            "s1": ["1"], "s2": ["1"], "s3": ["0"], "s4": ["0"], "s5": ["0"]
-        })
-        _, mask = col.core_snps(geno)
-        assert mask.iloc[0]
-
-    def test_all_ref_is_core(self, col):
-        """n_samples == 0 → core."""
-        geno = pd.DataFrame({"sA": ["0"], "sB": ["0"]})
-        _, mask = col.core_snps(geno)
-        assert mask.iloc[0]
-
-
-class TestOutlierDetectionLogic:
-    """
-    Test the IQR-based outlier detection logic directly using helper methods,
-    without reading any VCF files.
-    """
-
-    def test_uniform_samples_iqr_nonnegative(self, col):
-        """All pairwise ANIs equal → IQR = 0, no crash."""
-        geno = pd.DataFrame({
-            "sA": ["1", "0", "1"],
-            "sB": ["1", "0", "0"],
-            "sC": ["1", "0", "0"],
-        })
-        snp_mat = col.snp_matrix(geno)
-        ani_matrix = 1.0 - snp_mat / 10_000
-        n = len(ani_matrix)
-        pairwise = ani_matrix.values[np.triu_indices(n, k=1)]
-        iqr = float(np.percentile(pairwise, 75) - np.percentile(pairwise, 25))
-        assert iqr >= 0
-
-    def test_divergent_sample_falls_below_threshold(self, col):
-        """
-        10 identical samples + 1 fully divergent sample.
-        With alpha=1.0 the divergent sample's max_ani should be < threshold.
-        """
-        n_close = 10
-        n_pos = 20
-        base = ["1" if i % 2 == 0 else "0" for i in range(n_pos)]
-        inv  = ["0" if x == "1" else "1" for x in base]
-
-        data = {f"s{i}": base[:] for i in range(n_close)}
-        data["sK"] = inv
-        geno = pd.DataFrame(data)
-
-        genome_len = 10_000
-        snp_mat = col.snp_matrix(geno)
-        ani_matrix = 1.0 - snp_mat / genome_len
-
-        n = len(ani_matrix)
-        pairwise = ani_matrix.values[np.triu_indices(n, k=1)]
-        ani_median = float(np.median(pairwise))
-        ani_iqr = float(np.percentile(pairwise, 75) - np.percentile(pairwise, 25))
-        threshold = ani_median - 1.0 * ani_iqr
-
-        max_ani_sK = float(ani_matrix.loc["sK"].drop("sK").max())
-        assert max_ani_sK < threshold, (
-            f"Expected sK (max_ani={max_ani_sK:.6f}) to be below "
-            f"threshold={threshold:.6f}"
-        )
-
-    def test_similar_samples_not_flagged_with_large_alpha(self, col):
-        """With alpha=10 no sample should be filtered when all are similar."""
-        n_pos = 10
+    def test_all_similar_large_alpha_no_outlier(self, col):
         rng = np.random.default_rng(42)
-        data = {
-            f"s{i}": [str(rng.integers(0, 2)) for _ in range(n_pos)]
+        seqs = {
+            f"s{i}": "".join(rng.choice(list("ACGT"), size=40).tolist())
             for i in range(5)
         }
-        geno = pd.DataFrame(data)
+        result = col.find_outliers(seqs, alpha=10.0)
+        assert result == []
 
-        genome_len = 50_000
-        snp_mat = col.snp_matrix(geno)
-        ani_matrix = 1.0 - snp_mat / genome_len
 
-        n = len(ani_matrix)
-        pairwise = ani_matrix.values[np.triu_indices(n, k=1)]
-        ani_median = float(np.median(pairwise))
-        ani_iqr = float(np.percentile(pairwise, 75) - np.percentile(pairwise, 25))
-        threshold = ani_median - 10.0 * ani_iqr
+# ---------------------------------------------------------------------------
+# TestConsensusSequence
+# ---------------------------------------------------------------------------
 
-        for sample in ani_matrix.index:
-            max_ani = float(ani_matrix.loc[sample].drop(sample).max())
-            assert max_ani >= threshold, (
-                f"Sample {sample} was unexpectedly flagged with alpha=10"
-            )
+class TestConsensusSequence:
+
+    def test_unanimous_position(self, col):
+        seqs = {"s1": "AAA", "s2": "AAA", "s3": "AAA"}
+        cons = col.consensus_sequence(seqs)
+        assert list(cons) == ["A", "A", "A"]
+
+    def test_majority_wins(self, col):
+        seqs = {"s1": "AATG", "s2": "AACG", "s3": "AATG"}
+        cons = col.consensus_sequence(seqs)
+        assert cons[2] == "T"
+
+    def test_n_ignored_in_consensus(self, col):
+        seqs = {"s1": "NTG", "s2": "ATG", "s3": "ATG"}
+        cons = col.consensus_sequence(seqs)
+        assert cons[0] == "A"
+
+    def test_empty_sequences_raises(self, col):
+        with pytest.raises(ValueError):
+            col.consensus_sequence({})
+
+    def test_output_length_matches_sequence_length(self, col):
+        seqs = {"s1": "ACGT", "s2": "ACGT"}
+        assert len(col.consensus_sequence(seqs)) == 4
+
+
+# ---------------------------------------------------------------------------
+# TestRemovePrivateSnps
+# ---------------------------------------------------------------------------
+
+class TestRemovePrivateSnps:
+
+    def test_private_snp_replaced_with_consensus(self, col):
+        target = "ATCG"
+        others = {"s2": "TTCG", "s3": "TTCG"}
+        consensus = np.array(["T", "T", "C", "G"])
+        result = col.remove_private_snps(target, others, consensus)
+        assert result[0] == "T", "private A → replaced with consensus T"
+
+    def test_shared_snp_kept(self, col):
+        target = "ATCG"
+        others = {"s2": "ATCG"}
+        consensus = np.array(["A", "T", "C", "G"])
+        result = col.remove_private_snps(target, others, consensus)
+        assert result == "ATCG"
+
+    def test_output_same_length_as_input(self, col):
+        target = "AAAA"
+        others = {"s2": "TTTT"}
+        consensus = np.array(["T", "T", "T", "T"])
+        result = col.remove_private_snps(target, others, consensus)
+        assert len(result) == 4
+
+
+# ---------------------------------------------------------------------------
+# TestWriteMsa
+# ---------------------------------------------------------------------------
+
+class TestWriteMsa:
+
+    def test_fasta_format(self, col, tmp_path):
+        seqs = {"s1": "ATCG", "s2": "ATCG"}
+        out = tmp_path / "out.fasta"
+        col.write_msa(seqs, out)
+        content = out.read_text()
+        assert content == ">s1\nATCG\n>s2\nATCG\n"
+
+    def test_raises_on_different_lengths(self, col, tmp_path):
+        with pytest.raises(ValueError):
+            col.write_msa({"s1": "AT", "s2": "ATCG"}, tmp_path / "bad.fasta")
+
+    def test_creates_file(self, col, tmp_path):
+        out = tmp_path / "out2.fasta"
+        col.write_msa({"s1": "ACGT"}, out)
+        assert out.exists() and out.stat().st_size > 0

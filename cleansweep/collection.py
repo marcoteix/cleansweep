@@ -1,5 +1,6 @@
 #%%
 import shutil
+import warnings
 import numpy as np
 import pandas as pd 
 from cleansweep.typing import File, Directory
@@ -8,19 +9,21 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 import subprocess
-from cleansweep.vcf import VCF, _VCF_HEADER, write_merged_vcf, remove_vcf_header_samples
-from scipy.spatial.distance import pdist, squareform
+from cleansweep.vcf import VCF, _VCF_HEADER, IUPAC_CODES, write_merged_vcf, remove_vcf_header_samples
+from scipy.spatial.distance import pdist, squareform, hamming
+from multiprocessing import cpu_count
+from multiprocessing.pool import ThreadPool
 
 @dataclass
 class Collection:
 
     vcfs: List[File]
     output: File
-    tmp_dir: Directory
     alpha: float = 10.0
     min_coverage: int = 10
     exclude: bool = False
     exclude_log: Union[File, None] = None
+    n_threads: Union[None, int] = None
 
     def __post_init__(self):
 
@@ -28,457 +31,338 @@ class Collection:
         for vcf in self.vcfs:
 
             if not Path(vcf).exists():
-                raise FileNotFoundError(
-                    f"VCF {str(vcf)} not found."
-                )
-
-        # Create tmp directory
-        self.tmp_dir = Path(self.tmp_dir)
-        self.tmp_dir.mkdir(exist_ok=True)
+                raise FileNotFoundError(f"VCF {str(vcf)} not found.")
 
         if self.alpha <= 0:
-            raise ValueError(
-                f"Alpha must be greater than 0. Got {self.alpha}."
-            )
+            raise ValueError(f"Alpha must be greater than 0. Got {self.alpha}.")
 
         if self.exclude_log is not None and not self.exclude:
-            raise ValueError(
-                f"--exclude-log ({self.exclude_log}) was given without --exclude."
-            )
-
-    def merge(self):
-
-        gzvcfs = self.prepare_vcfs(
-            vcfs = self.vcfs,
-            output_directory = self.tmp_dir,
-            min_coverage = self.min_coverage
-        )
-
-        self.merge_vcfs(
-            vcfs = list(gzvcfs.values()),
-            output = self.tmp_dir.joinpath("merged.vcf")
-        )
-
-        self.add_sample_names_to_vcf(
-            vcf = self.tmp_dir.joinpath("merged.vcf"),
-            names = list(gzvcfs.keys()),
-            tmp_dir = self.tmp_dir,
-            output = self.tmp_dir.joinpath("merged.named.vcf")
-        )
-
-        vcf, excluded_samples = self.merged_vcf_consensus_filter(
-            vcf = self.tmp_dir.joinpath("merged.named.vcf"),
-            alpha = self.alpha,
-            exclude = self.exclude
-        )
-
-        header = VCF(
-            self.tmp_dir.joinpath("merged.named.vcf")
-        ).get_header()
-
-        if excluded_samples:
-            print(
-                f"Excluding {len(excluded_samples)} sample(s) from merged VCF: "
-                f"{', '.join(excluded_samples)}."
-            )
-            header = remove_vcf_header_samples(header, excluded_samples)
-
-        write_merged_vcf(
-            vcf = vcf,
-            file = self.output,
-            header = header
-        )
-
-        if self.exclude_log is not None:
-            with open(self.exclude_log, "w") as file:
-                file.write("\n".join(excluded_samples))
-
-        #shutil.rmtree(self.tmp_dir)
+            raise ValueError(f"--exclude-log ({self.exclude_log}) was given without --exclude.")
+        
+        self.__set_n_threads()
     
-    def prepare_vcfs(
-        self,
-        vcfs: List[File],
-        output_directory: Directory,
-        filters: Union[None, str] = None,
-        min_coverage: int = 10
-    ) -> dict:
-        
-        output_directory = Path(output_directory)
-        output_directory.mkdir(exist_ok=True)
+    def msa(self):
+        """
+        Converts a set of VCF files to a multiple sequence alignment (MSA) in FASTA 
+        format. Samples that are identified as outliers based on their pairwise 
+        similarities will be excluded from the MSA or have their private SNPs removed, 
+        depending on the `exclude` parameter.
 
-        # Holds the paths to the filtered VCFs
-        gzvcfs = {}
-        
-        for vcf in vcfs:
+        If `exclude` is False (default), this method looks for outlier samples: it 
+        calculates the maximum average nucleotide identity (ANI) each sample shares with
+        any other sample. If a sample's maximum ANI is below the threshold defined by
+        the median minus `alpha` times the interquartile range (IQR) of the maximum ANI 
+        values, it is considered an outlier. For each outlier sample, any SNPs that are 
+        not shared with at least one other sample (i.e., private SNPs) are removed.
 
-            # Extract filename
-            filename = Path(vcf).stem
+        If `exclude` is True, outlier samples are completely excluded from the MSA.
+        """
 
-            gzvcf = output_directory.joinpath(
-                filename + ".vcf.gz"
+        # Convert each VCF to a sequence. Use multithreading to speed up the process
+        # if there are many VCFs.
+        with ThreadPool(processes=self.n_threads) as pool:
+            sequences = dict(pool.starmap(
+                self._vcf_to_seq_item, [(vcf,) for vcf in self.vcfs]
+            ))
+
+        # Pad sequences to the same length so downstream operations work correctly
+        if sequences:
+            max_len = max(len(s) for s in sequences.values())
+            sequences = {
+                name: seq + "N" * (max_len - len(seq))
+                for name, seq in sequences.items()
+            }
+
+        # Find outliers
+        outliers = self.find_outliers(sequences=sequences, alpha=self.alpha)
+
+        if self.exclude and outliers:
+            logging.info(
+                f"Excluding {len(outliers)} outlier sample(s) from MSA: "
+                f"{', '.join(outliers)}."
             )
 
-            # Convert to gzipped, filter, and index
-            command = [
-                "bcftools",
-                "view",
-            ] + (
-                ["-f", filters]
-                if not filters is None 
-                else []
-            ) + [
-                "-i", f"INFO/DP>={min_coverage}",
-                "-o", str(gzvcf),
-                "-O", "z",
-                "--write-index",
-                str(vcf)
-            ]
+            sequences = {
+                name: seq
+                for name, seq in sequences.items()
+                if name not in outliers
+            }
 
-            print(f"Running command \"" + " ".join(command) + "\"...")
+            # Write a list of excluded samples to the exclude log file if specified
+            if self.exclude_log is not None:
+                with open(self.exclude_log, "w") as f:
+                    for name in outliers:
+                        f.write(f"{name}\n")
 
-            rc = subprocess.run(command, capture_output=True)
-
-            self.__raise_run_error(
-                f"Filtering VCF {str(vcf)} failed.",
-                command,
-                rc
+        elif outliers:
+            logging.info(
+                f"Found {len(outliers)} outlier sample(s) in MSA: "
+                f"{', '.join(outliers)}. Removing sample-private SNPs..."
             )
 
-            gzvcfs[filename] = gzvcf
+            if len(sequences) < 3:
+                warnings.warn(
+                    "You are trying to use CleanSweep collection with less than 3 "
+                    "sequences. This may result in unreliable SNP calls."
+                )
 
-        return gzvcfs
+            # Generate consensus sequence
+            consensus = self.consensus_sequence(sequences=sequences)
 
-    def merge_vcfs(
-        self,
-        vcfs: List[File],
-        output: File
-    ):
-        
-        command = [
-            "bcftools",
-            "merge",
-            "-o", str(output),
-            "-O", "z",
-            "--force-samples",
-            #"--missing-to-ref"
-        ] + [
-            str(x)
-            for x in vcfs
-        ]
+            # Remove private SNPs from outliers. Use multithreading to speed up
+            # the process if there are many outliers.
+            with ThreadPool(processes=self.n_threads) as pool:
+                sequences = dict(pool.starmap(
+                    self._remove_private_snps_item,
+                    [(k, sequences, outliers, consensus) for k in sequences.keys()]
+                ))
 
-        rc = subprocess.run(command)
-
-        self.__raise_run_error(
-            "Merging VCFs failed.",
-            command,
-            rc
+        # Write MSA to output
+        self.write_msa(
+            sequences=sequences,
+            output_file=self.output
         )
+    
+    def _vcf_to_seq_item(self, vcf):
+        return (Path(vcf).stem, self.vcf_to_seq(vcf=vcf, min_dp=self.min_coverage))
 
-    def add_sample_names_to_vcf(
+    def _remove_private_snps_item(self, k, sequences, outliers, consensus):
+        if k in outliers:
+            return (k, self.remove_private_snps(
+                target_sequence=sequences[k],
+                other_sequences={name: seq for name, seq in sequences.items() if name != k},
+                consensus_sequence=consensus
+            ))
+        return (k, sequences[k])
+
+    def vcf_to_seq(
         self,
         vcf: File,
-        names: List[str],
-        tmp_dir: Directory,
-        output: File
+        min_dp: int = 10,
+        gt_col: str = "sample",
     ):
+        """
+        Convert a VCF file to a nucleotide sequence. Handles multi-allelic sites by 
+        using IUPAC codes to represent the bases.
+
+        Parameters
+        ----------
+        vcf : File
+            Path to the input VCF file.
+        min_dp : int, optional
+            Minimum depth of coverage to consider a genotype call valid. Default is 10.
+        gt_col : str, optional
+            Name of the genotype column in the VCF. Default is "sample".
         
-        # Add sample names with bcftools reheader
-        
-        sample_names_txt = Path(tmp_dir) \
-            .joinpath("sample_names.txt")
-        
-        with open(
-            sample_names_txt, "w"
-        ) as file:
+        Returns
+        -------
+        str
+            A string representing the nucleotide sequence, where each position 
+            corresponds to a base in the reference genome.
+        """
+        # Read input VCF
+        vcf_df = VCF(vcf).read(None)
+
+        # Return an empty string if the VCF is empty
+        if vcf_df.empty:
+            return ""
+
+        # Auto-detect the sample column: it's the 10th column (index 9), after the
+        # 9 fixed VCF columns. Named sample columns won't match the "sample" default.
+        if gt_col not in vcf_df.columns:
+            gt_col = vcf_df.columns[9]
+
+        # Allocate an array to hold the sequence
+        last_pos = vcf_df.iloc[-1].pos
+        seq = np.array(["N"] * last_pos, dtype=str)
+
+        # Iterate through the VCF and fill in the sequence
+        # To handle multi-allelic sites, we will use IUPAC codes to represent the bases
+        # While parsing the same position, we will collect the bases in a string and 
+        # then convert to IUPAC code at the end
+        prev_pos, base = 1, ""
+
+        for i, row in vcf_df.iterrows():
+
+            # If the position has changed, update the sequence with the previous base
+            # Note that VCF positions are 1-based, so we subtract 1 to get the correct 
+            # index in the sequence array
+            if row.pos != prev_pos:
+                seq[prev_pos - 1] = IUPAC_CODES.get("".join(sorted(base)), "N")
+                base = ""
+                prev_pos = row.pos
             
-            file.write(
-                "\n".join(names)
-            )
-        
-        command = [
-            "bcftools",
-            "reheader",
-            "-s", str(sample_names_txt),
-            "-o", str(output),
-            str(vcf)
-        ]
+            # Select between the ref or alt allele
+            if row.depth < min_dp or str(row[gt_col]) == ".":
+                base = "N"
+            elif str(row[gt_col]) == "0":
+                base += row.ref
+            elif str(row[gt_col]) == "1":
+                base += row.alt
+            else:
+                base = "N"
 
-        rc = subprocess.run(command)
+        # Update the last position in the sequence with the last base
+        seq[last_pos - 1] = IUPAC_CODES.get("".join(sorted(base)), "N")
 
-        self.__raise_run_error(
-            "Adding sample names to merged VCF failed.",
-            command,
-            rc
-        )
-
-    def merged_vcf_consensus_filter(
+        # Trim the sequence to the last position and return as a string
+        return "".join(seq[:last_pos])
+    
+    def find_outliers(
         self,
-        vcf: File,
-        alpha: float = 10.0,
-        exclude: bool = False
-    ) -> Tuple[pd.DataFrame, List[str]]:
-        
-        print("Applying consensus filter to merged VCF...")
-        
-        # Read VCF
-        vcf_df = VCF(vcf).read(
-            chrom = None,
-            add_base_counts = False
-        )
+        sequences: dict[str, str],
+        alpha: float = 3.0
+    ):
+        """
+        Identify outliers in a set of sequences based on their pairwise similarities.
+        Outliers are defined as sequences whose minimum similarity to any other sequence
+        is below the threshold defined by the median minus `alpha` times the 
+        interquartile range (IQR).
 
-        # Get genome length
-        genome_length = self.genome_lengths_from_vcf(
-            vcf,
-            vcf_df.chrom.unique()
-        )
+        Parameters
+        ----------
+        sequences : dict[str, str]
+            A dictionary where keys are sequence names and values are nucleotide 
+            sequences.
+        alpha : float, optional
+            The multiplier for the interquartile range (IQR) to determine outliers.
+            Default is 3.0.
 
-        # Subset genotype columns
-        genotype_columns = vcf_df.columns.difference(_VCF_HEADER)
+        Returns
+        -------
+        list[str]
+            A list of sequence names identified as outliers.
+        """
 
-        print(
-            f"Found {len(genotype_columns)} samples in merged VCF: "
-            f"{', '.join(genotype_columns)}."
-        )
-        
-        genotype = vcf_df.set_index(
-            [
-                "chrom",
-                "pos"
-            ]
-        )[genotype_columns] \
-        .astype(str).drop(
-            columns = [
-                "Reference", 
-                "alt_bc", 
-                "base_counts", 
-                "depth", 
-                "mapq", 
-                "p_alt", 
-                "ref_bc"
-            ],
-            errors = "ignore"
-        )
+        if len(sequences) < 2:
+            return []
 
-        # Compute pairwise SNP matrix and convert to ANI
-        full_snp_matrix = self.snp_matrix(genotype)
-        ani_matrix = 1.0 - full_snp_matrix / genome_length
+        # Holds the minimum similarity for each sequence between itself
+        # and all other sequences
+        min_similarities = {}
 
-        # Get the maximum ANI each sample shares with any other sample
-        # (ANI to the most closely related sample)
-        max_ani_per_sample = ani_matrix \
-            .stack() \
-            .to_frame() \
-            .reset_index() \
-            .rename(
-                columns = {
-                    "level_0": "sample_1",
-                    "level_1": "sample_2",
-                    0: "ani"
-                }
-            ).loc[ 
-                lambda x: x.sample_1.ne(x.sample_2)
-            ].groupby("sample_1").ani.max()
-
-        # Compute median and IQR
-        if len(max_ani_per_sample) < 2:
-            # Single sample — no filtering possible
-            vcf_df = vcf_df.assign(pos=vcf_df.pos.astype("Int64"))
-            return vcf_df, []
-
-        ani_median = float(np.median(max_ani_per_sample))
-        ani_iqr = float(np.percentile(max_ani_per_sample, 75) - np.percentile(max_ani_per_sample, 25))
-        threshold = ani_median - ani_iqr * alpha
-
-        print(
-            f"Maximum ANI summary: median={ani_median:.6f}, IQR={ani_iqr:.6f}, "
-            f"threshold (median - {alpha}*IQR)={threshold:.6f}"
-        )
-
-        # Samples with a maximum ANI below the threshold
-        flagged_samples = [
-            sample_name
-            for sample_name in ani_matrix.index
-            if float(max_ani_per_sample.loc[sample_name]) < threshold
-        ]
-
-        if exclude:
-
-            if flagged_samples and len(flagged_samples) == len(ani_matrix.index):
-                raise ValueError(
-                    f"All {len(ani_matrix.index)} samples were flagged as ANI outliers "
-                    f"(below threshold {threshold:.6f}); cannot exclude every sample "
-                    "from the merged VCF. Consider increasing --alpha."
-                )
-
-            for sample_name in flagged_samples:
-
-                max_ani = float(max_ani_per_sample.loc[sample_name])
-
-                print(
-                    f"Sample {sample_name} has a maximum ANI of {max_ani:.6f} to any other "
-                    f"sample, below the threshold of {threshold:.6f} "
-                    f"(median={ani_median:.6f}, IQR={ani_iqr:.6f}, alpha={alpha}). "
-                    f"Excluding sample."
-                )
-
-            genotype = genotype.drop(columns=flagged_samples)
-            excluded_samples = flagged_samples
-
-        else:
-
-            # Get core SNPs once — reused for every sample that triggers filtering
-            consensus, is_core = self.core_snps(genotype)
-
-            print(
-                f"Found {is_core.sum()} core SNPs out of {len(is_core)} total SNPs "
-                f"({is_core.mean()*100:.2f}%)."
+        for name_1, seq_1 in sequences.items():
+            min_similarities[name_1] = np.max(
+                [
+                    1 - hamming(list(seq_1), list(seq_2))
+                    for name_2, seq_2 in sequences.items()
+                    if name_1 != name_2
+                ]
             )
 
-            for sample_name in flagged_samples:
+        # Calculate the median and IQR of the minimum similarities
+        median = np.median(list(min_similarities.values()))
+        q1 = np.percentile(list(min_similarities.values()), 25)
+        q3 = np.percentile(list(min_similarities.values()), 75)
+        iqr = q3 - q1
 
-                max_ani = float(max_ani_per_sample.loc[sample_name])
+        # Identify outliers based on the IQR method
+        outliers = [k for k, v in min_similarities.items()
+            if v < (median - alpha * iqr)]
+        
+        return outliers
+    
+    def consensus_sequence(
+        self,
+        sequences: dict[str, str]
+    ) -> np.ndarray:
+        """
+        Generate a consensus sequence from a set of sequences. The consensus at each 
+        position is determined by the most common base among the sequences.
 
-                print(
-                    f"Sample {sample_name} has a maximum ANI of {max_ani:.6f} to any other "
-                    f"sample, below the threshold of {threshold:.6f} "
-                    f"(median={ani_median:.6f}, IQR={ani_iqr:.6f}, alpha={alpha}). "
-                    f"Removing non-core SNPs."
-                )
+        Parameters
+        ----------
+        sequences : dict[str, str]
+            A dictionary where keys are sequence names and values are nucleotide 
+            sequences.
 
-                # Replace non-core genotypes with per-site consensus
-                genotype = genotype.assign(
-                    **{
-                        sample_name: genotype[sample_name] \
-                            .where(
-                                (
-                                    is_core |
-                                    genotype[sample_name].eq(consensus) |
-                                    genotype[sample_name].eq(".") |
-                                    genotype[sample_name].isna()
-                                ),
-                                consensus
-                            )
-                    }
-                )
+        Returns
+        -------
+        Numpy array
+            An array representing the consensus sequence, where each position 
+            corresponds to the most common base at that position across all sequences.
+        """
 
-            excluded_samples = []
+        if len(sequences) == 0:
+            raise ValueError("No sequences provided for consensus generation.")
+        
+        def mode(line):
+            "A helper function to compute the mode of a list, ignoring '.' and 'N'."
+            bases = line[~np.isin(line, [".", "N"])]
+            if len(bases) == 0:
+                return "N"
+            values, counts = np.unique(bases, return_counts=True)
+            return values[np.argmax(counts)]
+        
+        seq_array = np.array([list(seq) for seq in sequences.values()])
+        consensus = np.apply_along_axis(mode, 0, seq_array)
+        return consensus
+    
+    def remove_private_snps(
+        self,
+        target_sequence: str,
+        other_sequences: dict[str, str],
+        consensus_sequence: np.ndarray
+    ) -> str:
+        """
+        Remove private SNPs from the target sequence by replacing them with the 
+        consensus sequence.
 
-        remaining_columns = [
-            c for c in vcf_df.columns if c not in excluded_samples
-        ]
+        Parameters
+        ----------
+        target_sequence : str
+            The nucleotide sequence from which private SNPs will be removed.
+        other_sequences : dict[str, str]
+            A dictionary of other sequences to compare against the target sequence.
+        consensus_sequence : np.ndarray
+            The consensus sequence to use for replacing private SNPs.
 
-        vcf_df = genotype.join(
-            vcf_df[
-                vcf_df.columns \
-                    .intersection(_VCF_HEADER + ["Reference"])
-            ].set_index(
-                ["chrom", "pos"]
+        Returns
+        -------
+        str
+            The target sequence with private SNPs replaced by the consensus sequence.
+        """
+
+        # Convert sequences to numpy arrays for efficient comparison
+        other_seqs = np.array([list(seq) for _, seq in other_sequences.items()])
+        target_seq = np.array(list(target_sequence))
+
+        private_snps = np.all(other_seqs != target_seq, axis=0)
+
+        # Replace private SNPs in the target sequence with the consensus
+        target_seq[private_snps] = consensus_sequence[private_snps]
+
+        return "".join(target_seq)
+    
+    def write_msa(
+        self,
+        sequences: dict[str, str],
+        output_file: File
+    ):
+        """
+        Write a multiple sequence alignment (MSA) to a FASTA file.
+
+        Parameters
+        ----------
+        sequences : dict[str, str]
+            A dictionary where keys are sequence names and values are nucleotide 
+            sequences.
+        output_file : File
+            Path to the output FASTA file.
+        """
+
+        # Verify that all sequences are of the same length
+        lengths = {len(seq) for seq in sequences.values()}
+        if len(lengths) > 1:
+            raise ValueError(
+                "All sequences must be of the same length to write an MSA. "
+                f"Found lengths: {lengths}."
             )
-        ).reset_index()[remaining_columns]
-
-        vcf_df = vcf_df.assign(
-            pos = vcf_df.pos.astype("Int64")
-        )
-
-        return vcf_df, excluded_samples
-
-    def genome_lengths_from_vcf(
-        self,
-        vcf: File,
-        chroms: List[str]
-    ) -> int:
         
-        with open(vcf) as file:
-            content = file.read()
-
-        return sum(
-            [
-                int(
-                    content.split(
-                        f"##contig=<ID={chrom},length="
-                    )[-1].split(">")[0]
-                ) for chrom in chroms
-            ]
-        )
-
-    def snp_distance(
-        self,
-        sample1: pd.Series,
-        sample2: pd.Series
-    ) -> int:
-
-        return int(
-            (
-                np.logical_and(
-                    np.logical_and(
-                        sample2 != ".",
-                        sample1 != "."
-                    ),
-                    sample2 != sample1
-                )
-            ).sum()
-        )
-
-    def snp_matrix(
-        self,
-        genotype: pd.DataFrame
-    ) -> pd.DataFrame:
-        
-        snp_matrix = squareform(
-            pdist(
-                genotype.transpose(),
-                metric = self.snp_distance
-            )
-        )
-
-        return pd.DataFrame(
-            snp_matrix,
-            columns = genotype.columns,
-            index = genotype.columns
-        )
-
-    def core_snps(
-        self,
-        genotype: pd.DataFrame
-    ) -> Tuple[pd.DataFrame, pd.Series]:
-        
-        # First, get the most common genotype at each site (the per-site consensus)
-        consensus = genotype \
-            .astype(str) \
-            .replace(".", pd.NA) \
-            .mode(
-                axis = 1,
-                dropna = True
-            )[0] \
-            .astype(str) \
-            .fillna(".")
-
-        # Number of occurrences across all samples
-        n_samples = genotype.eq("1").sum(
-            axis = 1,
-            numeric_only = True
-        )
-
-        # Number of samples with genotype information
-        n_pass = genotype.ne(".").sum(axis=1)
-
-        core = (
-            n_pass.eq(1) | \
-            n_samples.eq(n_pass) | \
-            n_samples.eq(0) | \
-            (
-                n_samples.gt(1) & \
-                n_samples.lt(n_pass-1)
-            )
-        )
-
-        core = ~(
-            n_pass.lt(2) | \
-            n_samples.eq(1) | \
-            n_samples.eq(n_pass-1)
-        )
-        
-        return consensus, core
+        with open(output_file, "w") as f:
+            for name, seq in sequences.items():
+                f.write(f">{name}\n")
+                f.write(f"{seq}\n")
 
     def __raise_run_error(
         self,
@@ -495,6 +379,18 @@ class Collection:
             raise RuntimeError(message)
         else:
             print("Command successful!")
+
+    def __set_n_threads(self):
+        if self.n_threads is None:
+            self.n_threads = cpu_count()
+        elif self.n_threads < 1:
+            raise ValueError(f"n_threads must be greater than 0. Got {self.n_threads}.")
+        elif self.n_threads > cpu_count():
+            warnings.warn(
+                f"n_threads ({self.n_threads}) is greater than the number of available "
+                f"CPU cores ({cpu_count()}). Using {cpu_count()} threads instead."
+            )
+            self.n_threads = cpu_count()
 
 
 # %%
