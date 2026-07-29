@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 import subprocess
-from cleansweep.vcf import VCF, _VCF_HEADER, write_merged_vcf, remove_vcf_header_samples
+from cleansweep.vcf import VCF, _VCF_HEADER, IUPAC_CODES, write_merged_vcf, remove_vcf_header_samples
 from scipy.spatial.distance import pdist, squareform
 
 @dataclass
@@ -28,23 +28,17 @@ class Collection:
         for vcf in self.vcfs:
 
             if not Path(vcf).exists():
-                raise FileNotFoundError(
-                    f"VCF {str(vcf)} not found."
-                )
+                raise FileNotFoundError(f"VCF {str(vcf)} not found.")
 
         # Create tmp directory
         self.tmp_dir = Path(self.tmp_dir)
         self.tmp_dir.mkdir(exist_ok=True)
 
         if self.alpha <= 0:
-            raise ValueError(
-                f"Alpha must be greater than 0. Got {self.alpha}."
-            )
+            raise ValueError(f"Alpha must be greater than 0. Got {self.alpha}.")
 
         if self.exclude_log is not None and not self.exclude:
-            raise ValueError(
-                f"--exclude-log ({self.exclude_log}) was given without --exclude."
-            )
+            raise ValueError(f"--exclude-log ({self.exclude_log}) was given without --exclude.")
 
     def merge(self):
 
@@ -479,6 +473,74 @@ class Collection:
         )
         
         return consensus, core
+    
+    def vcf_to_seq(
+        vcf: File,
+        min_dp: int = 10,
+        gt_col: str = "sample",
+    ):
+        """
+        Convert a VCF file to a nucleotide sequence. Handles multi-allelic sites by 
+        using IUPAC codes to represent the bases.
+
+        Parameters
+        ----------
+        vcf : File
+            Path to the input VCF file.
+        min_dp : int, optional
+            Minimum depth of coverage to consider a genotype call valid. Default is 10.
+        gt_col : str, optional
+            Name of the genotype column in the VCF. Default is "sample".
+        
+        Returns
+        -------
+        str
+            A string representing the nucleotide sequence, where each position 
+            corresponds to a base in the reference genome.
+        """
+        # Read input VCF
+        vcf_df = VCF(vcf).read(None)
+        
+        # Return an empty string if the VCF is empty
+        if vcf_df.empty:
+            return ""
+
+        # Allocate an array to hold the sequence
+        last_pos = vcf_df.iloc[-1].pos
+        seq = np.array(["N"] * last_pos, dtype=str)
+
+        # Iterate through the VCF and fill in the sequence
+        # To handle multi-allelic sites, we will use IUPAC codes to represent the bases
+        # While parsing the same position, we will collect the bases in a string and 
+        # then convert to IUPAC code at the end
+        prev_pos, base = 1, ""
+
+        for i, row in vcf_df.iterrows():
+
+            # If the position has changed, update the sequence with the previous base
+            # Note that VCF positions are 1-based, so we subtract 1 to get the correct 
+            # index in the sequence array
+            if row.pos != prev_pos:
+                seq[row.pos - 2] = IUPAC_CODES.get("".join(sorted(base)), "N")
+                base = ""
+                prev_pos = row.pos
+            
+            # Select between the ref or alt allele
+            if row.depth < min_dp or str(row[gt_col]) == ".":
+                base = "N"
+            elif str(row[gt_col]) == "0":
+                base += row.ref
+            elif str(row[gt_col]) == "1":
+                base += row.alt
+            else:
+                base = "N"
+
+        # Update the last position in the sequence with the last base
+        seq[last_pos - 1] = IUPAC_CODES.get("".join(sorted(base)), "N")
+
+        # Trim the sequence to the last position and return as a string
+        return "".join(seq[:last_pos])
+
 
     def __raise_run_error(
         self,
