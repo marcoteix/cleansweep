@@ -11,7 +11,8 @@ import logging
 import subprocess
 from cleansweep.vcf import VCF, _VCF_HEADER, IUPAC_CODES, write_merged_vcf, remove_vcf_header_samples
 from scipy.spatial.distance import pdist, squareform, hamming
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
+from multiprocessing.pool import ThreadPool
 
 @dataclass
 class Collection:
@@ -57,15 +58,20 @@ class Collection:
         If `exclude` is True, outlier samples are completely excluded from the MSA.
         """
 
-        # Convert each VCF to a sequence. Use multithreading to speed up the process 
+        # Convert each VCF to a sequence. Use multithreading to speed up the process
         # if there are many VCFs.
-        with Pool(processes=self.n_threads) as pool:
-            sequences = dict(pool.map(
-                lambda vcf: (
-                    Path(vcf).stem, 
-                    self.vcf_to_seq(vcf=vcf, min_dp=self.min_coverage)
-                ), self.vcfs
+        with ThreadPool(processes=self.n_threads) as pool:
+            sequences = dict(pool.starmap(
+                self._vcf_to_seq_item, [(vcf,) for vcf in self.vcfs]
             ))
+
+        # Pad sequences to the same length so downstream operations work correctly
+        if sequences:
+            max_len = max(len(s) for s in sequences.values())
+            sequences = {
+                name: seq + "N" * (max_len - len(seq))
+                for name, seq in sequences.items()
+            }
 
         # Find outliers
         outliers = self.find_outliers(sequences=sequences, alpha=self.alpha)
@@ -103,23 +109,12 @@ class Collection:
             # Generate consensus sequence
             consensus = self.consensus_sequence(sequences=sequences)
 
-            # Remove private SNPs from outliers. Use multithreading to speed up 
+            # Remove private SNPs from outliers. Use multithreading to speed up
             # the process if there are many outliers.
-            with Pool(processes=self.n_threads) as pool:
-                sequences = dict(pool.map(
-                    lambda k: (
-                        k,
-                        self.remove_private_snps(
-                            target_sequence=sequences[k],
-                            other_sequences={
-                                name: seq
-                                for name, seq in sequences.items()
-                                if name != k
-                            },
-                            consensus_sequence=consensus
-                        ) if k in outliers else sequences[k]
-                    ),
-                    sequences.keys()
+            with ThreadPool(processes=self.n_threads) as pool:
+                sequences = dict(pool.starmap(
+                    self._remove_private_snps_item,
+                    [(k, sequences, outliers, consensus) for k in sequences.keys()]
                 ))
 
         # Write MSA to output
@@ -128,6 +123,18 @@ class Collection:
             output_file=self.output
         )
     
+    def _vcf_to_seq_item(self, vcf):
+        return (Path(vcf).stem, self.vcf_to_seq(vcf=vcf, min_dp=self.min_coverage))
+
+    def _remove_private_snps_item(self, k, sequences, outliers, consensus):
+        if k in outliers:
+            return (k, self.remove_private_snps(
+                target_sequence=sequences[k],
+                other_sequences={name: seq for name, seq in sequences.items() if name != k},
+                consensus_sequence=consensus
+            ))
+        return (k, sequences[k])
+
     def vcf_to_seq(
         self,
         vcf: File,
@@ -155,10 +162,15 @@ class Collection:
         """
         # Read input VCF
         vcf_df = VCF(vcf).read(None)
-        
+
         # Return an empty string if the VCF is empty
         if vcf_df.empty:
             return ""
+
+        # Auto-detect the sample column: it's the 10th column (index 9), after the
+        # 9 fixed VCF columns. Named sample columns won't match the "sample" default.
+        if gt_col not in vcf_df.columns:
+            gt_col = vcf_df.columns[9]
 
         # Allocate an array to hold the sequence
         last_pos = vcf_df.iloc[-1].pos
@@ -176,7 +188,7 @@ class Collection:
             # Note that VCF positions are 1-based, so we subtract 1 to get the correct 
             # index in the sequence array
             if row.pos != prev_pos:
-                seq[row.pos - 2] = IUPAC_CODES.get("".join(sorted(base)), "N")
+                seq[prev_pos - 1] = IUPAC_CODES.get("".join(sorted(base)), "N")
                 base = ""
                 prev_pos = row.pos
             
@@ -282,7 +294,8 @@ class Collection:
             values, counts = np.unique(bases, return_counts=True)
             return values[np.argmax(counts)]
         
-        consensus = np.apply_along_axis(mode, 0, sequences)
+        seq_array = np.array([list(seq) for seq in sequences.values()])
+        consensus = np.apply_along_axis(mode, 0, seq_array)
         return consensus
     
     def remove_private_snps(
