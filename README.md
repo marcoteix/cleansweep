@@ -1,5 +1,8 @@
 # CleanSweep
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/marcoteix/cleansweep/tests.yml?branch=main&label=tests)](https://github.com/marcoteix/cleansweep/actions/workflows/tests.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/marcoteix/cleansweep?label=coverage)](https://codecov.io/gh/marcoteix/cleansweep)
+
 Finds strain-specific single nucleotide variants from plate swipe data.
 
 CleanSweep leverages allele coverage depths to call strain-specific single-nucleotide variants from short-read plate swipe data. It calls variants along the entire genome of target strains. Thus, CleanSweep allows genetic distances to be estimated using a common reference across samples.
