@@ -475,6 +475,7 @@ class Collection:
         return consensus, core
     
     def vcf_to_seq(
+        self,
         vcf: File,
         min_dp: int = 10,
         gt_col: str = "sample",
@@ -542,6 +543,7 @@ class Collection:
         return "".join(seq[:last_pos])
     
     def find_outliers(
+        self,
         sequences: dict[str, str],
         alpha: float = 3.0
     ):
@@ -593,7 +595,107 @@ class Collection:
             if v < (median - alpha * iqr)]
         
         return outliers
+    
+    def consensus_sequence(
+        self,
+        sequences: dict[str, str]
+    ) -> np.ndarray:
+        """
+        Generate a consensus sequence from a set of sequences. The consensus at each 
+        position is determined by the most common base among the sequences.
 
+        Parameters
+        ----------
+        sequences : dict[str, str]
+            A dictionary where keys are sequence names and values are nucleotide 
+            sequences.
+
+        Returns
+        -------
+        Numpy array
+            An array representing the consensus sequence, where each position 
+            corresponds to the most common base at that position across all sequences.
+        """
+
+        if len(sequences) == 0:
+            raise ValueError("No sequences provided for consensus generation.")
+        
+        def mode(line):
+            "A helper function to compute the mode of a list, ignoring '.' and 'N'."
+            bases = line[~np.isin(line, [".", "N"])]
+            if len(bases) == 0:
+                return "N"
+            values, counts = np.unique(bases, return_counts=True)
+            return values[np.argmax(counts)]
+        
+        consensus = np.apply_along_axis(mode, 0, sequences)
+        return consensus
+    
+    def remove_private_snps(
+        self,
+        target_sequence: str,
+        other_sequences: dict[str, str],
+        consensus_sequence: np.ndarray
+    ) -> str:
+        """
+        Remove private SNPs from the target sequence by replacing them with the 
+        consensus sequence.
+
+        Parameters
+        ----------
+        target_sequence : str
+            The nucleotide sequence from which private SNPs will be removed.
+        other_sequences : dict[str, str]
+            A dictionary of other sequences to compare against the target sequence.
+        consensus_sequence : np.ndarray
+            The consensus sequence to use for replacing private SNPs.
+
+        Returns
+        -------
+        str
+            The target sequence with private SNPs replaced by the consensus sequence.
+        """
+
+        # Convert sequences to numpy arrays for efficient comparison
+        other_seqs = np.array([list(seq) for _, seq in other_sequences.items()])
+        target_seq = np.array(list(target_sequence))
+
+        private_snps = np.all(other_seqs != target_seq, axis=0)
+
+        # Replace private SNPs in the target sequence with the consensus
+        target_seq[private_snps] = consensus_sequence[private_snps]
+
+        return "".join(target_seq)
+    
+    def write_msa(
+        self,
+        sequences: dict[str, str],
+        output_file: File
+    ):
+        """
+        Write a multiple sequence alignment (MSA) to a FASTA file.
+
+        Parameters
+        ----------
+        sequences : dict[str, str]
+            A dictionary where keys are sequence names and values are nucleotide 
+            sequences.
+        output_file : File
+            Path to the output FASTA file.
+        """
+
+        # Verify that all sequences are of the same length
+        lengths = {len(seq) for seq in sequences.values()}
+        if len(lengths) > 1:
+            raise ValueError(
+                "All sequences must be of the same length to write an MSA. "
+                f"Found lengths: {lengths}."
+            )
+        
+        with open(output_file, "w") as f:
+            for name, seq in sequences.items():
+                f.write(f">{name}\n")
+                f.write(f"{seq}\n")
 
     def __raise_run_error(
         self,
