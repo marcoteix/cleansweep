@@ -9,7 +9,7 @@ from pathlib import Path
 import logging
 import subprocess
 from cleansweep.vcf import VCF, _VCF_HEADER, IUPAC_CODES, write_merged_vcf, remove_vcf_header_samples
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist, squareform, hamming
 
 @dataclass
 class Collection:
@@ -540,6 +540,59 @@ class Collection:
 
         # Trim the sequence to the last position and return as a string
         return "".join(seq[:last_pos])
+    
+    def find_outliers(
+        sequences: dict[str, str],
+        alpha: float = 3.0
+    ):
+        """
+        Identify outliers in a set of sequences based on their pairwise similarities.
+        Outliers are defined as sequences whose minimum similarity to any other sequence
+        is below the threshold defined by the median minus `alpha` times the 
+        interquartile range (IQR).
+
+        Parameters
+        ----------
+        sequences : dict[str, str]
+            A dictionary where keys are sequence names and values are nucleotide 
+            sequences.
+        alpha : float, optional
+            The multiplier for the interquartile range (IQR) to determine outliers.
+            Default is 3.0.
+
+        Returns
+        -------
+        list[str]
+            A list of sequence names identified as outliers.
+        """
+
+        if len(sequences) < 2:
+            return []
+
+        # Holds the minimum similarity for each sequence between itself
+        # and all other sequences
+        min_similarities = {}
+
+        for name_1, seq_1 in sequences.items():
+            min_similarities[name_1] = np.max(
+                [
+                    1 - hamming(list(seq_1), list(seq_2))
+                    for name_2, seq_2 in sequences.items()
+                    if name_1 != name_2
+                ]
+            )
+
+        # Calculate the median and IQR of the minimum similarities
+        median = np.median(list(min_similarities.values()))
+        q1 = np.percentile(list(min_similarities.values()), 25)
+        q3 = np.percentile(list(min_similarities.values()), 75)
+        iqr = q3 - q1
+
+        # Identify outliers based on the IQR method
+        outliers = [k for k, v in min_similarities.items()
+            if v < (median - alpha * iqr)]
+        
+        return outliers
 
 
     def __raise_run_error(
