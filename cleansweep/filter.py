@@ -71,7 +71,7 @@ class VCFFilter:
         threads: int = 5,
         engine: str = "pymc",
         overdispersion_bias: int = 1,
-    ) -> pd.Series:   
+    ) -> pd.DataFrame:   
     
         # Step 1: estimate the coverage of the background strain
 

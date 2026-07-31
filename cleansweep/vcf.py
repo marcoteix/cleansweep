@@ -176,7 +176,7 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
 
         if not hasattr(vcf, "base_counts"):
             vcf = vcf.assign(base_counts = vcf["info"] \
-                .apply(partial(get_info_value, tag="BC", dtype=str)))
+                .apply(partial(get_info_value, tag=["BC", "DP4"], dtype=str)))
             
         if not hasattr(vcf, "mapq"):
             vcf = vcf.assign(mapq = vcf["info"] \
@@ -269,11 +269,38 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
         # Find the maximum base count (alt allele)
         return bases[np.argmax(bc)]
         
-def get_info_value(s:str, tag:str, delim:str = ";", dtype = float):
-    
-    if not tag in s: return None
+def get_info_value(
+    s:str, 
+    tag:Union[str, list[str]], 
+    delim:str = ";", 
+    dtype = float
+):
+    """
+    Extracts a value from a VCF INFO string.
 
-    str_value = s.split(tag+"=")[-1].split(delim)[0]
+    Args:
+        s (str): The INFO string.
+        tag (Union[str, list[str]]): The tag(s) to extract. If a list is provided, 
+            the function will return the value for the first tag found in the INFO 
+            string.
+        delim (str, optional): The delimiter used in the INFO string. Defaults to ";".
+        dtype (type, optional): The type to cast the extracted value to. Defaults to float.
+
+    Returns:
+        The extracted and casted value, or None if not found.
+    """
+
+    if isinstance(tag, str): tag = [tag]
+
+    # Iterate over tags until we find one that is present in the INFO string
+    str_value = None
+    for t in tag:
+        if t + "=" in s:
+            str_value = s.split(t+"=")[-1].split(delim)[0]
+            break
+
+    if str_value is None:
+        return None
 
     try:
         return dtype(str_value)

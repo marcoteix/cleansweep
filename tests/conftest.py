@@ -308,3 +308,75 @@ def synthetic_background_fastas_gz(session_tmpdir, synthetic_background_fastas) 
             dst.write(src.read())
         gz_paths.append(gz_path)
     return gz_paths
+
+
+# ---------------------------------------------------------------------------
+# Synthetic reference FASTA and BAM for VariantCaller (call.py) tests
+# ---------------------------------------------------------------------------
+CALL_CHROM = "call_synthetic_chrom"
+CALL_CHROM_LEN = 1_000
+CALL_READ_LEN = 100
+
+
+@pytest.fixture(scope="session")
+def synthetic_call_reference(session_tmpdir) -> Path:
+    """1 kb single-contig synthetic reference FASTA for VariantCaller tests."""
+    rng = np.random.default_rng(2024)
+    seq = "".join(rng.choice(list("ACGT"), size=CALL_CHROM_LEN).tolist())
+    path = session_tmpdir / "call_reference.fa"
+    _write_fasta(path, CALL_CHROM, seq)
+    return path
+
+
+@pytest.fixture(scope="session")
+def synthetic_call_bam(session_tmpdir, synthetic_call_reference) -> Path:
+    """
+    BAM aligned to `synthetic_call_reference`, built directly with pysam
+    (no real aligner invoked). ~20x uniform coverage of reads that match the
+    reference exactly, plus a block of reads carrying an ALT base at a fixed
+    position so `bcftools call` has a variant to call.
+    """
+    ref_seq = "".join(
+        line.strip()
+        for line in synthetic_call_reference.read_text().splitlines()[1:]
+    )
+
+    bam_path = session_tmpdir / "call_alignment.bam"
+    variant_pos = 500  # 0-based position that will carry an ALT allele
+    depth = 20
+
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [{"SN": CALL_CHROM, "LN": CALL_CHROM_LEN}],
+    }
+
+    with pysam.AlignmentFile(bam_path, "wb", header=header) as bam:
+        read_id = 0
+        for start in range(0, CALL_CHROM_LEN - CALL_READ_LEN, 10):
+            for _ in range(depth):
+                bases = list(ref_seq[start:start + CALL_READ_LEN])
+
+                if start <= variant_pos < start + CALL_READ_LEN:
+                    offset = variant_pos - start
+                    ref_base = bases[offset]
+                    alt_base = "A" if ref_base != "A" else "C"
+                    bases[offset] = alt_base
+
+                seg = pysam.AlignedSegment()
+                seg.query_name = f"read_{read_id}"
+                seg.query_sequence = "".join(bases)
+                seg.flag = 0
+                seg.reference_id = 0
+                seg.reference_start = start
+                seg.mapping_quality = 60
+                seg.cigarstring = f"{CALL_READ_LEN}M"
+                seg.query_qualities = pysam.qualitystring_to_array("I" * CALL_READ_LEN)
+                bam.write(seg)
+                read_id += 1
+
+    unsorted_path = bam_path.with_suffix(".unsorted.bam")
+    bam_path.rename(unsorted_path)
+    pysam.sort("-o", str(bam_path), str(unsorted_path))
+    pysam.index(str(bam_path))
+
+    return bam_path
