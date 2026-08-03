@@ -33,7 +33,7 @@ class CleanSweep:
         reads1: File,
         reads2: Union[File, None],
         reference: Union[File, str],
-        background: List[File, None],
+        background: Union[None, List[File]],
         output: Directory,
         prefix: str = "cleansweep",
         *,
@@ -383,7 +383,7 @@ class CleanSweep:
     def __get_fastas(
         self,
         reference: Union[File, None],
-        background: List[File, None],
+        background: Union[List[File], None],
         straingst_results: Union[List[File], None],
         straingst_database: Union[Directory, None]
     ) -> tuple[File, List[File]]:
@@ -420,9 +420,9 @@ class CleanSweep:
             if straingst_database is None:
                 raise ValueError("Provided StrainGST results without setting a "
                     "StrainGST database.")
-            if reference is not None or background is not None:
+            if background is not None:
                 self.logger.warning("Provided StrainGST results, but also provided a "
-                    "reference and/or background FASTAs. The StrainGST results will be "
+                    "background FASTAs. The StrainGST results will be "
                     "used, and the provided reference/background FASTAs will be ignored.")
 
             straingst_parser = StrainGSTParser()
