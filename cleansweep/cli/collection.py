@@ -33,6 +33,15 @@ class CollectionCmd(Subcommand):
 
         io_grp.add_argument("input", type=str, nargs="+", help="CleanSweep VCFs to merge.")
         io_grp.add_argument("--output", "-o", type=str, help="Output MSA file.")
+        io_grp.add_argument("--reference", "-r", type=str, default=None,
+            help="Reference FASTA used for variant calling (the cleansweep.reference.fa "
+            "written by cleansweep prepare), optionally gzip-compressed. Strongly "
+            "recommended: CleanSweep then only reads variant and low-coverage records "
+            "from each VCF and patches them into the reference, which is far faster and "
+            "uses far less memory for large collections. The MSA spans the whole "
+            "reference, so positions with no record in a VCF take the reference base. "
+            "Without it, each VCF is converted to a full-length sequence and positions "
+            "with no record are left as N. Defaults to no reference.")
         io_grp.add_argument("--exclude-log", type=str, default=None,
             help="Path to write the IDs of samples excluded from the MSA (one "
             "per line). Only meaningful together with --exclude; raises an error if "
@@ -71,6 +80,7 @@ coverage are represented as N in the multi-sequence alignment. Defaults to %(def
         exclude: bool,
         exclude_log: Union[File, None],
         n_threads: int,
+        reference: Union[File, None] = None,
         **kwargs
     ):
 
@@ -79,9 +89,19 @@ coverage are represented as N in the multi-sequence alignment. Defaults to %(def
             f"(alpha={alpha}, exclude={exclude}). Writing output to {str(output)}..."
         )
 
+        if reference is None:
+            print(
+                "No --reference given, so each VCF will be converted to a full-length "
+                "sequence. Pass the reference FASTA used for variant calling for a "
+                "much faster run on large collections."
+            )
+        else:
+            print(f"Anchoring the MSA on the reference in {str(reference)}...")
+
         Collection(
             vcfs=input,
             output=output,
+            reference=reference,
             alpha=alpha,
             min_coverage=min_coverage,
             exclude=exclude,
