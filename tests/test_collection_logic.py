@@ -1,8 +1,16 @@
 """Unit tests for Collection logic — no CLI, no multi-process I/O."""
+import gzip
+
 import numpy as np
 import pytest
+from scipy.spatial.distance import hamming
 
-from cleansweep.collection import Collection
+from cleansweep.collection import (
+    Collection,
+    combine_duplicates,
+    load_reference,
+    pack_sequences,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,113 +108,286 @@ class TestVcfToSeq:
 
 
 # ---------------------------------------------------------------------------
-# TestFindOutliers
+# Fixtures for the reference-anchored path
 # ---------------------------------------------------------------------------
 
-class TestFindOutliers:
+@pytest.fixture(scope="module")
+def chr1_reference(tmp_path_factory):
+    """A 3 bp reference for CHR1, the contig `simple_vcf` uses. Bases A, C, G."""
+    d = tmp_path_factory.mktemp("chr1_ref")
+    p = d / "chr1.fa"
+    p.write_text(">CHR1\nACG\n")
+    return p
 
-    def test_single_sequence_returns_empty(self, col):
-        assert col.find_outliers({"s1": "AAAA"}) == []
 
-    def test_two_identical_no_outlier(self, col):
-        seqs = {"s1": "AAAA", "s2": "AAAA"}
-        assert col.find_outliers(seqs, alpha=1.0) == []
-
-    def test_divergent_sample_flagged(self, col):
-        similar = "A" * 50
-        outlier = "T" * 50
-        seqs = {f"s{i}": similar for i in range(4)}
-        seqs["sOUT"] = outlier
-        result = col.find_outliers(seqs, alpha=1.0)
-        assert "sOUT" in result
-        assert all(f"s{i}" not in result for i in range(4))
-
-    def test_all_similar_large_alpha_no_outlier(self, col):
-        rng = np.random.default_rng(42)
-        seqs = {
-            f"s{i}": "".join(rng.choice(list("ACGT"), size=40).tolist())
-            for i in range(5)
-        }
-        result = col.find_outliers(seqs, alpha=10.0)
-        assert result == []
+@pytest.fixture(scope="module")
+def two_contig_reference(tmp_path_factory):
+    """A reference with two 4 bp contigs, for global coordinate mapping."""
+    d = tmp_path_factory.mktemp("two_contig")
+    p = d / "two.fa"
+    p.write_text(">C1\nAAAA\n>C2\nCCCC\n")
+    return p
 
 
 # ---------------------------------------------------------------------------
-# TestConsensusSequence
+# TestLoadReference
 # ---------------------------------------------------------------------------
 
-class TestConsensusSequence:
+class TestLoadReference:
 
-    def test_unanimous_position(self, col):
-        seqs = {"s1": "AAA", "s2": "AAA", "s3": "AAA"}
-        cons = col.consensus_sequence(seqs)
-        assert list(cons) == ["A", "A", "A"]
+    def test_single_contig_sequence(self, chr1_reference):
+        reference, _, _ = load_reference(chr1_reference)
+        assert reference.tobytes().decode() == "ACG"
 
-    def test_majority_wins(self, col):
-        seqs = {"s1": "AATG", "s2": "AACG", "s3": "AATG"}
-        cons = col.consensus_sequence(seqs)
-        assert cons[2] == "T"
+    def test_single_contig_offsets_and_lengths(self, chr1_reference):
+        _, offsets, lengths = load_reference(chr1_reference)
+        assert offsets == {"CHR1": 0}
+        assert lengths == {"CHR1": 3}
 
-    def test_n_ignored_in_consensus(self, col):
-        seqs = {"s1": "NTG", "s2": "ATG", "s3": "ATG"}
-        cons = col.consensus_sequence(seqs)
-        assert cons[0] == "A"
+    def test_contigs_are_concatenated_in_file_order(self, two_contig_reference):
+        reference, offsets, lengths = load_reference(two_contig_reference)
+        assert reference.tobytes().decode() == "AAAACCCC"
+        assert offsets == {"C1": 0, "C2": 4}
+        assert lengths == {"C1": 4, "C2": 4}
 
-    def test_empty_sequences_raises(self, col):
+    def test_lowercase_is_upcased(self, tmp_path):
+        p = tmp_path / "lower.fa"
+        p.write_text(">C1\nacgt\n")
+        reference, _, _ = load_reference(p)
+        assert reference.tobytes().decode() == "ACGT"
+
+    def test_gzipped_reference(self, tmp_path, chr1_reference):
+        gz = tmp_path / "chr1.fa.gz"
+        with gzip.open(gz, "wt") as f:
+            f.write(chr1_reference.read_text())
+        reference, offsets, _ = load_reference(gz)
+        assert reference.tobytes().decode() == "ACG"
+        assert offsets == {"CHR1": 0}
+
+    def test_empty_fasta_raises(self, tmp_path):
+        p = tmp_path / "empty.fa"
+        p.write_text("")
         with pytest.raises(ValueError):
-            col.consensus_sequence({})
+            load_reference(p)
 
-    def test_output_length_matches_sequence_length(self, col):
-        seqs = {"s1": "ACGT", "s2": "ACGT"}
-        assert len(col.consensus_sequence(seqs)) == 4
-
-
-# ---------------------------------------------------------------------------
-# TestRemovePrivateSnps
-# ---------------------------------------------------------------------------
-
-class TestRemovePrivateSnps:
-
-    def test_private_snp_replaced_with_consensus(self, col):
-        target = "ATCG"
-        others = {"s2": "TTCG", "s3": "TTCG"}
-        consensus = np.array(["T", "T", "C", "G"])
-        result = col.remove_private_snps(target, others, consensus)
-        assert result[0] == "T", "private A → replaced with consensus T"
-
-    def test_shared_snp_kept(self, col):
-        target = "ATCG"
-        others = {"s2": "ATCG"}
-        consensus = np.array(["A", "T", "C", "G"])
-        result = col.remove_private_snps(target, others, consensus)
-        assert result == "ATCG"
-
-    def test_output_same_length_as_input(self, col):
-        target = "AAAA"
-        others = {"s2": "TTTT"}
-        consensus = np.array(["T", "T", "T", "T"])
-        result = col.remove_private_snps(target, others, consensus)
-        assert len(result) == 4
-
-
-# ---------------------------------------------------------------------------
-# TestWriteMsa
-# ---------------------------------------------------------------------------
-
-class TestWriteMsa:
-
-    def test_fasta_format(self, col, tmp_path):
-        seqs = {"s1": "ATCG", "s2": "ATCG"}
-        out = tmp_path / "out.fasta"
-        col.write_msa(seqs, out)
-        content = out.read_text()
-        assert content == ">s1\nATCG\n>s2\nATCG\n"
-
-    def test_raises_on_different_lengths(self, col, tmp_path):
+    def test_duplicate_contig_raises(self, tmp_path):
+        p = tmp_path / "dup.fa"
+        p.write_text(">C1\nAAAA\n>C1\nCCCC\n")
         with pytest.raises(ValueError):
-            col.write_msa({"s1": "AT", "s2": "ATCG"}, tmp_path / "bad.fasta")
+            load_reference(p)
 
-    def test_creates_file(self, col, tmp_path):
-        out = tmp_path / "out2.fasta"
-        col.write_msa({"s1": "ACGT"}, out)
-        assert out.exists() and out.stat().st_size > 0
+
+# ---------------------------------------------------------------------------
+# TestVcfToSparse
+# ---------------------------------------------------------------------------
+
+class TestVcfToSparse:
+
+    def test_selects_only_non_reference_records(self, col, simple_vcf, chr1_reference):
+        """pos 2 is a covered reference call, so it must not be reported."""
+        _, offsets, lengths = load_reference(chr1_reference)
+        positions, _ = col.vcf_to_sparse(
+            vcf=simple_vcf, offsets=offsets, lengths=lengths, min_dp=10
+        )
+        assert positions.tolist() == [0, 2], "0-based indices of pos 1 and pos 3"
+
+    def test_alt_and_low_coverage_codes(self, col, simple_vcf, chr1_reference):
+        _, offsets, lengths = load_reference(chr1_reference)
+        _, codes = col.vcf_to_sparse(
+            vcf=simple_vcf, offsets=offsets, lengths=lengths, min_dp=10
+        )
+        assert codes.tobytes().decode() == "TN", "pos 1 is alt T, pos 3 is low coverage"
+
+    def test_unknown_contig_raises(self, col, simple_vcf, two_contig_reference):
+        _, offsets, lengths = load_reference(two_contig_reference)
+        with pytest.raises(ValueError, match="absent from the reference"):
+            col.vcf_to_sparse(
+                vcf=simple_vcf, offsets=offsets, lengths=lengths, min_dp=10
+            )
+
+    def test_position_past_contig_end_raises(self, col, simple_vcf, tmp_path):
+        short = tmp_path / "short.fa"
+        short.write_text(">CHR1\nAC\n")
+        _, offsets, lengths = load_reference(short)
+        with pytest.raises(ValueError, match="outside"):
+            col.vcf_to_sparse(
+                vcf=simple_vcf, offsets=offsets, lengths=lengths, min_dp=10
+            )
+
+    def test_second_contig_is_offset(self, col, tmp_path, two_contig_reference):
+        """A record on C2 must land past the end of C1."""
+        p = tmp_path / "c2.vcf"
+        p.write_text(
+            "##fileformat=VCFv4.2\n"
+            "##contig=<ID=C1,length=4>\n"
+            "##contig=<ID=C2,length=4>\n"
+            '##INFO=<ID=DP,Number=1,Type=Integer,Description="Depth">\n'
+            '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
+            "C1\t2\t.\tA\tT\t60\tPASS\tDP=30\tGT\t1\n"
+            "C2\t2\t.\tC\tG\t60\tPASS\tDP=30\tGT\t1\n"
+        )
+        _, offsets, lengths = load_reference(two_contig_reference)
+        positions, codes = col.vcf_to_sparse(
+            vcf=p, offsets=offsets, lengths=lengths, min_dp=10
+        )
+        assert positions.tolist() == [1, 5], "C1:2 -> 1, C2:2 -> 4 + 1"
+        assert codes.tobytes().decode() == "TG"
+
+
+# ---------------------------------------------------------------------------
+# TestCombineDuplicates
+# ---------------------------------------------------------------------------
+
+class TestCombineDuplicates:
+
+    def _codes(self, s):
+        return np.frombuffer(s.encode(), dtype=np.uint8)
+
+    def test_no_duplicates_passes_through(self):
+        pos, codes = combine_duplicates(np.array([5, 1, 3]), self._codes("ACG"))
+        assert pos.tolist() == [1, 3, 5]
+        assert codes.tobytes().decode() == "CGA"
+
+    def test_two_distinct_bases_become_iupac(self):
+        pos, codes = combine_duplicates(np.array([7, 7]), self._codes("AG"))
+        assert pos.tolist() == [7]
+        assert codes.tobytes().decode() == "R", "A + G is IUPAC R"
+
+    def test_iupac_is_order_independent(self):
+        _, forward = combine_duplicates(np.array([7, 7]), self._codes("CT"))
+        _, reverse = combine_duplicates(np.array([7, 7]), self._codes("TC"))
+        assert forward.tobytes() == reverse.tobytes() == b"Y"
+
+    def test_repeated_identical_base_is_kept(self):
+        _, codes = combine_duplicates(np.array([2, 2]), self._codes("TT"))
+        assert codes.tobytes().decode() == "T"
+
+    def test_any_ambiguous_record_wins(self):
+        _, codes = combine_duplicates(np.array([2, 2]), self._codes("AN"))
+        assert codes.tobytes().decode() == "N"
+
+    def test_three_bases_become_iupac(self):
+        _, codes = combine_duplicates(np.array([1, 1, 1]), self._codes("ACG"))
+        assert codes.tobytes().decode() == "V", "A + C + G is IUPAC V"
+
+
+# ---------------------------------------------------------------------------
+# TestMaxIdentities
+# ---------------------------------------------------------------------------
+
+class TestMaxIdentities:
+
+    def test_identical_rows_are_fully_identical(self):
+        matrix, length = pack_sequences(["ACGT", "ACGT"])
+        assert Collection.max_identities(matrix, length).tolist() == [1.0, 1.0]
+
+    def test_single_row_returns_one(self):
+        matrix, length = pack_sequences(["ACGT"])
+        assert Collection.max_identities(matrix, length).tolist() == [1.0]
+
+    def test_matches_scipy_hamming(self):
+        seqs = ["AAAACCCC", "AAAACCCG", "TTTTGGGG"]
+        matrix, length = pack_sequences(seqs)
+        identities = Collection.max_identities(matrix, length)
+        expected = [
+            max(1 - hamming(list(a), list(b)) for j, b in enumerate(seqs) if i != j)
+            for i, a in enumerate(seqs)
+        ]
+        assert identities == pytest.approx(expected)
+
+    def test_denominator_is_total_length_not_column_count(self):
+        """
+        The sparse contract: two rows differing at 1 of 2 held columns, out of a
+        1000 bp alignment, are 999/1000 identical -- not 1/2.
+        """
+        matrix, _ = pack_sequences(["AC", "AG"])
+        identities = Collection.max_identities(matrix, total_length=1000)
+        assert identities == pytest.approx([0.999, 0.999])
+
+
+# ---------------------------------------------------------------------------
+# TestOutlierIndices
+# ---------------------------------------------------------------------------
+
+class TestOutlierIndices:
+
+    def test_fewer_than_two_rows_returns_empty(self):
+        matrix, length = pack_sequences(["ACGT"])
+        assert Collection.outlier_indices(matrix, length, alpha=1.0) == []
+
+    def test_zero_length_returns_empty(self):
+        matrix, _ = pack_sequences(["", ""])
+        assert Collection.outlier_indices(matrix, 0, alpha=1.0) == []
+
+    def test_sparse_and_dense_agree(self):
+        """
+        Dropping the columns where every row agrees must not change the verdict.
+        """
+        dense = ["A" * 20 + "C", "A" * 20 + "C", "A" * 20 + "G"]
+        dense_matrix, dense_length = pack_sequences(dense)
+        # Only the last column varies, so that is the whole sparse alignment.
+        sparse_matrix, _ = pack_sequences(["C", "C", "G"])
+        assert (
+            Collection.outlier_indices(sparse_matrix, dense_length, alpha=0.5)
+            == Collection.outlier_indices(dense_matrix, dense_length, alpha=0.5)
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestConsensusFromMatrix
+# ---------------------------------------------------------------------------
+
+class TestConsensusFromMatrix:
+
+    def test_majority_wins(self):
+        matrix, _ = pack_sequences(["AATG", "AACG", "AATG"])
+        assert Collection.consensus_from_matrix(matrix).tobytes().decode() == "AATG"
+
+    def test_n_is_ignored(self):
+        matrix, _ = pack_sequences(["NTG", "ATG", "ATG"])
+        assert Collection.consensus_from_matrix(matrix).tobytes().decode() == "ATG"
+
+    def test_all_ambiguous_column_is_n(self):
+        matrix, _ = pack_sequences(["N.", "NN"])
+        assert Collection.consensus_from_matrix(matrix).tobytes().decode() == "NN"
+
+    def test_tie_resolves_to_smallest_base(self):
+        matrix, _ = pack_sequences(["A", "T"])
+        assert Collection.consensus_from_matrix(matrix).tobytes().decode() == "A"
+
+    def test_empty_matrix_raises(self):
+        with pytest.raises(ValueError):
+            Collection.consensus_from_matrix(np.empty((0, 4), dtype=np.uint8))
+
+
+# ---------------------------------------------------------------------------
+# TestRemovePrivateFromMatrix
+# ---------------------------------------------------------------------------
+
+class TestRemovePrivateFromMatrix:
+
+    def test_private_base_replaced_with_consensus(self):
+        matrix, _ = pack_sequences(["ATCG", "TTCG", "TTCG"])
+        consensus = np.frombuffer(b"TTCG", dtype=np.uint8)
+        Collection.remove_private_from_matrix(matrix, 0, consensus)
+        assert matrix[0].tobytes().decode() == "TTCG"
+
+    def test_shared_base_kept(self):
+        matrix, _ = pack_sequences(["ATCG", "ATCG"])
+        consensus = np.frombuffer(b"TTTT", dtype=np.uint8)
+        Collection.remove_private_from_matrix(matrix, 0, consensus)
+        assert matrix[0].tobytes().decode() == "ATCG"
+
+    def test_other_rows_untouched(self):
+        matrix, _ = pack_sequences(["ATCG", "TTCG", "TTCG"])
+        consensus = np.frombuffer(b"TTCG", dtype=np.uint8)
+        Collection.remove_private_from_matrix(matrix, 0, consensus)
+        assert matrix[1].tobytes().decode() == "TTCG"
+        assert matrix[2].tobytes().decode() == "TTCG"
+
+    def test_single_row_is_a_no_op(self):
+        matrix, _ = pack_sequences(["ATCG"])
+        Collection.remove_private_from_matrix(matrix, 0, np.frombuffer(b"TTTT", dtype=np.uint8))
+        assert matrix[0].tobytes().decode() == "ATCG"
+

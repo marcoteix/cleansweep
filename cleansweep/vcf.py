@@ -44,12 +44,13 @@ class VCF:
         if isinstance(self.file, Path): self.file = str(self.file) 
 
     def read(
-        self, 
-        chrom: Union[str, None, List], 
-        filters: Union[Collection[str], None] = None, 
+        self,
+        chrom: Union[str, None, List],
+        filters: Union[Collection[str], None] = None,
         include: Union[str, None]=None,
         exclude: Union[str, None]=None,
-        add_base_counts: bool = True
+        add_base_counts: bool = True,
+        filter_indels: bool = True,
     ) -> pd.DataFrame:
         """Filters a VCF file (compressed or uncompressed) with bcftools. Requires bcftools.
 
@@ -79,36 +80,38 @@ code {rc.returncode}. Command: \'{' '.join(command)}\'."
             logging.error(rc.stdout)
             raise RuntimeError(msg)
         
-        # Store filtered VCF as an attribute
-        self.vcf = pd.read_csv(
-            StringIO(rc.stdout.decode("utf-8")), 
-            sep="\t", 
-            comment="#", 
-            header=None
-        )  
-
-        self.vcf.columns = [
-            x
-            for x in rc.stdout \
-                .decode("utf-8") \
-                .split("\n") 
-            if x.startswith("#")
+        # Derive column names from the last # header line before parsing data,
+        # so an all-header response (no data records) can still return a typed
+        # empty DataFrame rather than raising EmptyDataError.
+        raw_cols = [
+            x for x in rc.stdout.decode("utf-8").split("\n") if x.startswith("#")
         ][-1].split("\t")
-
-        self.vcf.columns = [
+        columns = [
             (
                 x.removeprefix("#").lower()
                 if x.removeprefix("#").lower() in _VCF_HEADER
                 else x.removeprefix("#")
-            ) for x in self.vcf.columns
+            ) for x in raw_cols
         ]
+
+        try:
+            self.vcf = pd.read_csv(
+                StringIO(rc.stdout.decode("utf-8")),
+                sep="\t",
+                comment="#",
+                header=None,
+            )
+            self.vcf.columns = columns
+        except pd.errors.EmptyDataError:
+            self.vcf = pd.DataFrame(columns=columns)
 
         # Keep variants in the query
         if chrom:
             if isinstance(chrom, str): chrom = [chrom]
             self.vcf = self.vcf[self.vcf.chrom.isin(chrom)]
 
-        self.vcf = self.exclude_indels(self.vcf)
+        if filter_indels:
+            self.vcf = self.exclude_indels(self.vcf)
         if add_base_counts:
             self.vcf = self.add_info_columns(self.vcf)
 

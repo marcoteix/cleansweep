@@ -115,14 +115,19 @@ cleansweep collection \
     sample2/cleansweep.variants.vcf.gz \
     sample3/cleansweep.variants.vcf.gz \
     --output collection.fasta \
+    --reference cleansweep.reference.fa \
     --alpha 10 \
     --min-coverage 10
 ```
 
+**Pass `--reference` for large collections.** Given the reference FASTA used for variant calling (the `cleansweep.reference.fa` written by `cleansweep prepare`), CleanSweep reads only the variant and low-coverage records from each VCF and patches them into a copy of the reference, instead of walking every record of every VCF. Every stage then scales with the number of variant sites rather than with the genome length, which is what makes hundreds of samples practical — around 90x faster on a whole-site VCF, with identical output.
+
+`--reference` is optional and accepts gzip-compressed FASTA. Without it, each VCF is converted to a full-length sequence and positions with no record at all are left as `N`. With it, the alignment spans the whole reference and positions with no record take the reference base — this is the intended behaviour, but it means the two modes differ for VCFs that do not contain every site (as produced by `cleansweep filter --variants`). For the default whole-site VCFs written by `cleansweep filter`, both modes give the same alignment.
+
 **How the outlier filter works:**
 
-1. Each per-sample VCF is converted to a nucleotide sequence. Positions with coverage below `--min-coverage` are encoded as `N`.
-2. For each sample, CleanSweep computes the maximum ANI to any other sample in the dataset, producing one value per sample.
+1. Each per-sample VCF is converted to a nucleotide sequence. Positions with coverage below `--min-coverage` are encoded as `N`, as are indels and multi-allelic sites.
+2. For each sample, CleanSweep computes the maximum ANI to any other sample in the dataset, producing one value per sample. ANI is always taken over the full alignment length, so it does not depend on whether `--reference` was used.
 3. The median and interquartile range (IQR) of these per-sample maximum ANIs are computed.
 4. Any sample whose maximum ANI falls below `median - alpha × IQR` is flagged as a divergent outlier.
 5. By default, flagged samples are cleaned in place: their sample-private SNPs (positions differing from all other samples) are replaced with the per-site consensus base of the remaining samples.

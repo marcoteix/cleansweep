@@ -84,6 +84,7 @@ sequence alignment with ``cleansweep collection``:
        sample2/cleansweep.variants.vcf.gz \
        sample3/cleansweep.variants.vcf.gz \
        --output collection.fasta \
+       --reference cleansweep.reference.fa \
        --alpha 10 \
        --min-coverage 10
 
@@ -93,3 +94,25 @@ cleaning their private SNPs:
 .. code-block:: bash
 
    cleansweep collection ... --exclude --exclude-log excluded_samples.txt
+
+Scaling to large collections
+----------------------------
+
+``--reference`` takes the reference FASTA used for variant calling — the
+``cleansweep.reference.fa`` written by ``cleansweep prepare`` — optionally
+gzip-compressed. Given it, CleanSweep reads only the variant and low-coverage
+records from each VCF and patches them into a copy of the reference, rather than
+walking every record of every VCF.
+
+The alignment is then carried as a ``samples x variant sites`` array, so the
+outlier scan, the consensus, and the private-SNP removal all scale with the
+number of variant sites instead of with the genome length. This is what makes
+collections of hundreds of samples practical; on a whole-site VCF it runs around
+90 times faster and produces identical output.
+
+Without ``--reference``, each VCF is converted to a full-length sequence and
+positions with no record at all are left as ``N``. With it, the alignment spans
+the whole reference and positions with no record take the reference base. For the
+whole-site VCFs ``cleansweep filter`` writes by default the two modes agree; for
+the sparse VCFs written by ``cleansweep filter --variants`` they do not, and the
+reference-anchored result is the intended one.
